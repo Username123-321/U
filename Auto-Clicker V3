@@ -1,0 +1,960 @@
+-- Универсальный Автокликер (v2 - Mobile + Fixed Drag)
+-- LocalScript
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local HttpService = game:GetService("HttpService")
+local GuiService = game:GetService("GuiService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- ====================== НАСТРОЙКИ ======================
+local MIN_INTERVAL_MS = 50
+local DEFAULT_INTERVAL = 200
+local DEFAULT_COLOR = Color3.fromRGB(0, 170, 255)
+-- =======================================================
+
+local points = {}
+local mode = "Separate"
+local isRunning = false
+local minimized = false
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "UniversalAutoClicker"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.IgnoreGuiInset = true
+screenGui.Parent = playerGui
+
+-- ====================== ГЛАВНОЕ ОКНО ======================
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 340, 0, 440)
+mainFrame.Position = UDim2.new(0.5, -170, 0.5, -220)
+mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Parent = screenGui
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 12)
+mainCorner.Parent = mainFrame
+
+local mainStroke = Instance.new("UIStroke")
+mainStroke.Color = Color3.fromRGB(60, 60, 70)
+mainStroke.Thickness = 1.5
+mainStroke.Parent = mainFrame
+
+-- Заголовок (для перетаскивания окна)
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 40)
+titleBar.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+titleBar.BorderSizePixel = 0
+titleBar.Parent = mainFrame
+
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 12)
+titleCorner.Parent = titleBar
+
+local titleFix = Instance.new("Frame")
+titleFix.Size = UDim2.new(1, 0, 0, 14)
+titleFix.Position = UDim2.new(0, 0, 1, -14)
+titleFix.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+titleFix.BorderSizePixel = 0
+titleFix.Parent = titleBar
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, -90, 1, 0)
+titleLabel.Position = UDim2.new(0, 14, 0, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "Автокликер"
+titleLabel.TextColor3 = Color3.fromRGB(240, 240, 245)
+titleLabel.TextSize = 16
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = titleBar
+
+-- Перетаскивание главного окна
+do
+	local dragging = false
+	local dragStart, startPos
+
+	titleBar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = mainFrame.Position
+		end
+	end)
+
+	titleBar.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = input.Position - dragStart
+			mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		end
+	end)
+end
+
+-- Кнопки × и –
+local function createTopButton(text, color, pos)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(0, 30, 0, 30)
+	btn.Position = pos
+	btn.BackgroundColor3 = color
+	btn.Text = text
+	btn.TextColor3 = Color3.new(1, 1, 1)
+	btn.TextSize = 18
+	btn.Font = Enum.Font.GothamBold
+	btn.BorderSizePixel = 0
+	btn.AutoButtonColor = false
+	btn.Parent = titleBar
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 7)
+	corner.Parent = btn
+
+	return btn
+end
+
+local closeBtn = createTopButton("×", Color3.fromRGB(220, 60, 60), UDim2.new(1, -38, 0.5, -15))
+local minimizeBtn = createTopButton("–", Color3.fromRGB(80, 80, 90), UDim2.new(1, -74, 0.5, -15))
+
+-- Контент
+local content = Instance.new("Frame")
+content.Size = UDim2.new(1, -20, 1, -56)
+content.Position = UDim2.new(0, 10, 0, 48)
+content.BackgroundTransparency = 1
+content.Parent = mainFrame
+
+local contentLayout = Instance.new("UIListLayout")
+contentLayout.Padding = UDim.new(0, 8)
+contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+contentLayout.Parent = content
+
+-- Кнопка добавить точку
+local addPointBtn = Instance.new("TextButton")
+addPointBtn.Size = UDim2.new(1, 0, 0, 38)
+addPointBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 220)
+addPointBtn.Text = "+  Добавить точку"
+addPointBtn.TextColor3 = Color3.new(1, 1, 1)
+addPointBtn.TextSize = 15
+addPointBtn.Font = Enum.Font.GothamBold
+addPointBtn.BorderSizePixel = 0
+addPointBtn.LayoutOrder = 1
+addPointBtn.Parent = content
+
+local addCorner = Instance.new("UICorner")
+addCorner.CornerRadius = UDim.new(0, 8)
+addCorner.Parent = addPointBtn
+
+-- Список точек
+local pointsScroll = Instance.new("ScrollingFrame")
+pointsScroll.Size = UDim2.new(1, 0, 0, 220)
+pointsScroll.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+pointsScroll.BorderSizePixel = 0
+pointsScroll.ScrollBarThickness = 5
+pointsScroll.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 120)
+pointsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+pointsScroll.LayoutOrder = 2
+pointsScroll.Parent = content
+
+local pointsCorner = Instance.new("UICorner")
+pointsCorner.CornerRadius = UDim.new(0, 8)
+pointsCorner.Parent = pointsScroll
+
+local pointsLayout = Instance.new("UIListLayout")
+pointsLayout.Padding = UDim.new(0, 6)
+pointsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+pointsLayout.Parent = pointsScroll
+
+local pointsPadding = Instance.new("UIPadding")
+pointsPadding.PaddingTop = UDim.new(0, 6)
+pointsPadding.PaddingBottom = UDim.new(0, 6)
+pointsPadding.PaddingLeft = UDim.new(0, 6)
+pointsPadding.PaddingRight = UDim.new(0, 6)
+pointsPadding.Parent = pointsScroll
+
+-- Режим
+local modeFrame = Instance.new("Frame")
+modeFrame.Size = UDim2.new(1, 0, 0, 52)
+modeFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+modeFrame.BorderSizePixel = 0
+modeFrame.LayoutOrder = 3
+modeFrame.Parent = content
+
+local modeCorner = Instance.new("UICorner")
+modeCorner.CornerRadius = UDim.new(0, 8)
+modeCorner.Parent = modeFrame
+
+local modeLabel = Instance.new("TextLabel")
+modeLabel.Size = UDim2.new(1, -16, 0, 20)
+modeLabel.Position = UDim2.new(0, 8, 0, 4)
+modeLabel.BackgroundTransparency = 1
+modeLabel.Text = "Режим работы"
+modeLabel.TextColor3 = Color3.fromRGB(180, 180, 190)
+modeLabel.TextSize = 12
+modeLabel.Font = Enum.Font.Gotham
+modeLabel.TextXAlignment = Enum.TextXAlignment.Left
+modeLabel.Parent = modeFrame
+
+local separateBtn = Instance.new("TextButton")
+separateBtn.Size = UDim2.new(0.47, 0, 0, 24)
+separateBtn.Position = UDim2.new(0.03, 0, 0, 24)
+separateBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 220)
+separateBtn.Text = "Отдельно"
+separateBtn.TextColor3 = Color3.new(1, 1, 1)
+separateBtn.TextSize = 13
+separateBtn.Font = Enum.Font.GothamBold
+separateBtn.BorderSizePixel = 0
+separateBtn.Parent = modeFrame
+
+local separateCorner = Instance.new("UICorner")
+separateCorner.CornerRadius = UDim.new(0, 6)
+separateCorner.Parent = separateBtn
+
+local togetherBtn = Instance.new("TextButton")
+togetherBtn.Size = UDim2.new(0.47, 0, 0, 24)
+togetherBtn.Position = UDim2.new(0.5, 0, 0, 24)
+togetherBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+togetherBtn.Text = "Вместе"
+togetherBtn.TextColor3 = Color3.new(1, 1, 1)
+togetherBtn.TextSize = 13
+togetherBtn.Font = Enum.Font.GothamBold
+togetherBtn.BorderSizePixel = 0
+togetherBtn.Parent = modeFrame
+
+local togetherCorner = Instance.new("UICorner")
+togetherCorner.CornerRadius = UDim.new(0, 6)
+togetherCorner.Parent = togetherBtn
+
+-- Старт / Стоп
+local startStopBtn = Instance.new("TextButton")
+startStopBtn.Size = UDim2.new(1, 0, 0, 42)
+startStopBtn.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+startStopBtn.Text = "▶  СТАРТ"
+startStopBtn.TextColor3 = Color3.new(1, 1, 1)
+startStopBtn.TextSize = 16
+startStopBtn.Font = Enum.Font.GothamBold
+startStopBtn.BorderSizePixel = 0
+startStopBtn.LayoutOrder = 4
+startStopBtn.Parent = content
+
+local startCorner = Instance.new("UICorner")
+startCorner.CornerRadius = UDim.new(0, 8)
+startCorner.Parent = startStopBtn
+
+-- Иконка минимизации
+local iconBtn = Instance.new("TextButton")
+iconBtn.Name = "Icon"
+iconBtn.Size = UDim2.new(0, 54, 0, 54)
+iconBtn.Position = UDim2.new(0, 20, 0.5, -27)
+iconBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 220)
+iconBtn.Text = "AC"
+iconBtn.TextColor3 = Color3.new(1, 1, 1)
+iconBtn.TextSize = 18
+iconBtn.Font = Enum.Font.GothamBold
+iconBtn.Visible = false
+iconBtn.Active = true
+iconBtn.Parent = screenGui
+
+local iconCorner = Instance.new("UICorner")
+iconCorner.CornerRadius = UDim.new(1, 0)
+iconCorner.Parent = iconBtn
+
+local iconStroke = Instance.new("UIStroke")
+iconStroke.Color = Color3.new(1, 1, 1)
+iconStroke.Thickness = 2.5
+iconStroke.Parent = iconBtn
+
+-- Перетаскивание иконки
+do
+	local dragging = false
+	local dragStart, startPos
+
+	iconBtn.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = iconBtn.Position
+		end
+	end)
+
+	iconBtn.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = input.Position - dragStart
+			iconBtn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		end
+	end)
+end
+
+-- Ресайз (правый нижний угол) — работает и на мобиле
+local resizeHandle = Instance.new("TextButton")
+resizeHandle.Size = UDim2.new(0, 22, 0, 22)
+resizeHandle.Position = UDim2.new(1, -22, 1, -22)
+resizeHandle.BackgroundColor3 = Color3.fromRGB(80, 80, 95)
+resizeHandle.Text = ""
+resizeHandle.BorderSizePixel = 0
+resizeHandle.Parent = mainFrame
+
+local rhCorner = Instance.new("UICorner")
+rhCorner.CornerRadius = UDim.new(0, 6)
+rhCorner.Parent = resizeHandle
+
+do
+	local resizing = false
+	local resizeStart, startSize
+
+	resizeHandle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			resizing = true
+			resizeStart = input.Position
+			startSize = mainFrame.Size
+		end
+	end)
+
+	resizeHandle.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			resizing = false
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if resizing and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = input.Position - resizeStart
+			local newX = math.clamp(startSize.X.Offset + delta.X, 280, 700)
+			local newY = math.clamp(startSize.Y.Offset + delta.Y, 340, 800)
+			mainFrame.Size = UDim2.new(0, newX, 0, newY)
+		end
+	end)
+end
+-- ====================== ДИАЛОГИ ======================
+
+local function createDialog(title, message, yesText, noText, onYes, onNo)
+	local overlay = Instance.new("Frame")
+	overlay.Size = UDim2.new(1, 0, 1, 0)
+	overlay.BackgroundColor3 = Color3.new(0, 0, 0)
+	overlay.BackgroundTransparency = 0.5
+	overlay.ZIndex = 50
+	overlay.Parent = screenGui
+
+	local dialog = Instance.new("Frame")
+	dialog.Size = UDim2.new(0, 290, 0, 160)
+	dialog.Position = UDim2.new(0.5, -145, 0.5, -80)
+	dialog.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+	dialog.BorderSizePixel = 0
+	dialog.ZIndex = 51
+	dialog.Parent = overlay
+
+	local dCorner = Instance.new("UICorner")
+	dCorner.CornerRadius = UDim.new(0, 12)
+	dCorner.Parent = dialog
+
+	local dTitle = Instance.new("TextLabel")
+	dTitle.Size = UDim2.new(1, -20, 0, 30)
+	dTitle.Position = UDim2.new(0, 12, 0, 12)
+	dTitle.BackgroundTransparency = 1
+	dTitle.Text = title
+	dTitle.TextColor3 = Color3.fromRGB(240, 240, 245)
+	dTitle.TextSize = 16
+	dTitle.Font = Enum.Font.GothamBold
+	dTitle.TextXAlignment = Enum.TextXAlignment.Left
+	dTitle.ZIndex = 52
+	dTitle.Parent = dialog
+
+	local dMsg = Instance.new("TextLabel")
+	dMsg.Size = UDim2.new(1, -24, 0, 55)
+	dMsg.Position = UDim2.new(0, 12, 0, 44)
+	dMsg.BackgroundTransparency = 1
+	dMsg.Text = message
+	dMsg.TextColor3 = Color3.fromRGB(180, 180, 190)
+	dMsg.TextSize = 13
+	dMsg.Font = Enum.Font.Gotham
+	dMsg.TextWrapped = true
+	dMsg.TextXAlignment = Enum.TextXAlignment.Left
+	dMsg.TextYAlignment = Enum.TextYAlignment.Top
+	dMsg.ZIndex = 52
+	dMsg.Parent = dialog
+
+	local yesBtn = Instance.new("TextButton")
+	yesBtn.Size = UDim2.new(0, 110, 0, 34)
+	yesBtn.Position = UDim2.new(0.5, -120, 1, -48)
+	yesBtn.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+	yesBtn.Text = yesText or "Да"
+	yesBtn.TextColor3 = Color3.new(1, 1, 1)
+	yesBtn.TextSize = 14
+	yesBtn.Font = Enum.Font.GothamBold
+	yesBtn.BorderSizePixel = 0
+	yesBtn.ZIndex = 52
+	yesBtn.Parent = dialog
+
+	local yesCorner = Instance.new("UICorner")
+	yesCorner.CornerRadius = UDim.new(0, 8)
+	yesCorner.Parent = yesBtn
+
+	local noBtn = Instance.new("TextButton")
+	noBtn.Size = UDim2.new(0, 110, 0, 34)
+	noBtn.Position = UDim2.new(0.5, 10, 1, -48)
+	noBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+	noBtn.Text = noText or "Нет"
+	noBtn.TextColor3 = Color3.new(1, 1, 1)
+	noBtn.TextSize = 14
+	noBtn.Font = Enum.Font.GothamBold
+	noBtn.BorderSizePixel = 0
+	noBtn.ZIndex = 52
+	noBtn.Parent = dialog
+
+	local noCorner = Instance.new("UICorner")
+	noCorner.CornerRadius = UDim.new(0, 8)
+	noCorner.Parent = noBtn
+
+	yesBtn.MouseButton1Click:Connect(function()
+		overlay:Destroy()
+		if onYes then onYes() end
+	end)
+	noBtn.MouseButton1Click:Connect(function()
+		overlay:Destroy()
+		if onNo then onNo() end
+	end)
+end
+
+-- ====================== ТОЧКИ ======================
+
+local function updatePointsCanvas()
+	pointsScroll.CanvasSize = UDim2.new(0, 0, 0, pointsLayout.AbsoluteContentSize.Y + 14)
+end
+
+local function getNextOrder()
+	local maxOrder = 0
+	for _, p in ipairs(points) do
+		if p.order > maxOrder then maxOrder = p.order end
+	end
+	return maxOrder + 1
+end
+
+local function createPointVisual(point)
+	local size = 34
+	local circle = Instance.new("TextButton")
+	circle.Name = "Point_" .. point.id
+	circle.Size = UDim2.new(0, size, 0, size)
+	circle.Position = UDim2.new(0, point.position.X - size/2, 0, point.position.Y - size/2)
+	circle.BackgroundColor3 = point.color
+	circle.Text = tostring(point.order)
+	circle.TextColor3 = Color3.new(1, 1, 1)
+	circle.TextSize = 14
+	circle.Font = Enum.Font.GothamBold
+	circle.BorderSizePixel = 0
+	circle.ZIndex = 20
+	circle.AutoButtonColor = false
+	circle.Parent = screenGui
+
+	local cCorner = Instance.new("UICorner")
+	cCorner.CornerRadius = UDim.new(1, 0)
+	cCorner.Parent = circle
+
+	local cStroke = Instance.new("UIStroke")
+	cStroke.Color = Color3.new(1, 1, 1)
+	cStroke.Thickness = 2.5
+	cStroke.Parent = circle
+
+	-- ===== ПЕРЕТАСКИВАНИЕ ТОЧКИ (ПК + Мобила) =====
+	local dragging = false
+	local dragInput, dragStart, startPos
+
+	local function update(input)
+		local delta = input.Position - dragStart
+		circle.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+	end
+
+	circle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = circle.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+					-- Обновляем точную позицию центра
+					point.position = Vector2.new(
+						circle.AbsolutePosition.X + circle.AbsoluteSize.X / 2,
+						circle.AbsolutePosition.Y + circle.AbsoluteSize.Y / 2
+					)
+				end
+			end)
+		end
+	end)
+
+	circle.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if input == dragInput and dragging then
+			update(input)
+		end
+	end)
+
+	point.visual = circle
+	return circle
+end
+
+local function openPointSettings(point)
+	local overlay = Instance.new("Frame")
+	overlay.Size = UDim2.new(1, 0, 1, 0)
+	overlay.BackgroundColor3 = Color3.new(0, 0, 0)
+	overlay.BackgroundTransparency = 0.45
+	overlay.ZIndex = 40
+	overlay.Parent = screenGui
+
+	local sett = Instance.new("Frame")
+	sett.Size = UDim2.new(0, 310, 0, 360)
+	sett.Position = UDim2.new(0.5, -155, 0.5, -180)
+	sett.BackgroundColor3 = Color3.fromRGB(32, 32, 38)
+	sett.BorderSizePixel = 0
+	sett.ZIndex = 41
+	sett.Parent = overlay
+
+	local sCorner = Instance.new("UICorner")
+	sCorner.CornerRadius = UDim.new(0, 12)
+	sCorner.Parent = sett
+
+	local sTitle = Instance.new("TextLabel")
+	sTitle.Size = UDim2.new(1, -50, 0, 32)
+	sTitle.Position = UDim2.new(0, 14, 0, 10)
+	sTitle.BackgroundTransparency = 1
+	sTitle.Text = "Настройки точки"
+	sTitle.TextColor3 = Color3.fromRGB(240, 240, 245)
+	sTitle.TextSize = 16
+	sTitle.Font = Enum.Font.GothamBold
+	sTitle.TextXAlignment = Enum.TextXAlignment.Left
+	sTitle.ZIndex = 42
+	sTitle.Parent = sett
+
+	local closeSett = Instance.new("TextButton")
+	closeSett.Size = UDim2.new(0, 32, 0, 32)
+	closeSett.Position = UDim2.new(1, -40, 0, 10)
+	closeSett.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
+	closeSett.Text = "×"
+	closeSett.TextColor3 = Color3.new(1, 1, 1)
+	closeSett.TextSize = 18
+	closeSett.Font = Enum.Font.GothamBold
+	closeSett.BorderSizePixel = 0
+	closeSett.ZIndex = 42
+	closeSett.Parent = sett
+
+	local closeSCorner = Instance.new("UICorner")
+	closeSCorner.CornerRadius = UDim.new(0, 8)
+	closeSCorner.Parent = closeSett
+
+	-- Имя
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.Size = UDim2.new(1, -28, 0, 18)
+	nameLabel.Position = UDim2.new(0, 14, 0, 50)
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.Text = "Название"
+	nameLabel.TextColor3 = Color3.fromRGB(160, 160, 170)
+	nameLabel.TextSize = 12
+	nameLabel.Font = Enum.Font.Gotham
+	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+	nameLabel.ZIndex = 42
+	nameLabel.Parent = sett
+
+	local nameBox = Instance.new("TextBox")
+	nameBox.Size = UDim2.new(1, -28, 0, 32)
+	nameBox.Position = UDim2.new(0, 14, 0, 70)
+	nameBox.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+	nameBox.Text = point.name
+	nameBox.TextColor3 = Color3.new(1, 1, 1)
+	nameBox.TextSize = 14
+	nameBox.Font = Enum.Font.Gotham
+	nameBox.ClearTextOnFocus = false
+	nameBox.BorderSizePixel = 0
+	nameBox.ZIndex = 42
+	nameBox.Parent = sett
+
+	local nameCorner = Instance.new("UICorner")
+	nameCorner.CornerRadius = UDim.new(0, 8)
+	nameCorner.Parent = nameBox
+
+	-- Цвет
+	local colorLabel = Instance.new("TextLabel")
+	colorLabel.Size = UDim2.new(1, -28, 0, 18)
+	colorLabel.Position = UDim2.new(0, 14, 0, 112)
+	colorLabel.BackgroundTransparency = 1
+	colorLabel.Text = "Цвет"
+	colorLabel.TextColor3 = Color3.fromRGB(160, 160, 170)
+	colorLabel.TextSize = 12
+	colorLabel.Font = Enum.Font.Gotham
+	colorLabel.TextXAlignment = Enum.TextXAlignment.Left
+	colorLabel.ZIndex = 42
+	colorLabel.Parent = sett
+
+	local colors = {
+		Color3.fromRGB(0, 170, 255),
+		Color3.fromRGB(255, 80, 80),
+		Color3.fromRGB(80, 220, 100),
+		Color3.fromRGB(255, 180, 40),
+		Color3.fromRGB(180, 80, 255),
+		Color3.fromRGB(255, 100, 180),
+	}
+
+	for i, col in ipairs(colors) do
+		local cBtn = Instance.new("TextButton")
+		cBtn.Size = UDim2.new(0, 32, 0, 32)
+		cBtn.Position = UDim2.new(0, 14 + (i-1)*40, 0, 134)
+		cBtn.BackgroundColor3 = col
+		cBtn.Text = ""
+		cBtn.BorderSizePixel = 0
+		cBtn.ZIndex = 42
+		cBtn.Parent = sett
+
+		local cC = Instance.new("UICorner")
+		cC.CornerRadius = UDim.new(1, 0)
+		cC.Parent = cBtn
+
+		if point.color == col then
+			local sel = Instance.new("UIStroke")
+			sel.Color = Color3.new(1, 1, 1)
+			sel.Thickness = 2.5
+			sel.Parent = cBtn
+		end
+
+		cBtn.MouseButton1Click:Connect(function()
+			point.color = col
+			if point.visual then point.visual.BackgroundColor3 = col end
+			overlay:Destroy()
+			openPointSettings(point)
+		end)
+	end
+
+	-- Интервал
+	local intLabel = Instance.new("TextLabel")
+	intLabel.Size = UDim2.new(1, -28, 0, 18)
+	intLabel.Position = UDim2.new(0, 14, 0, 180)
+	intLabel.BackgroundTransparency = 1
+	intLabel.Text = "Интервал (мс)"
+	intLabel.TextColor3 = Color3.fromRGB(160, 160, 170)
+	intLabel.TextSize = 12
+	intLabel.Font = Enum.Font.Gotham
+	intLabel.TextXAlignment = Enum.TextXAlignment.Left
+	intLabel.ZIndex = 42
+	intLabel.Parent = sett
+
+	local intBox = Instance.new("TextBox")
+	intBox.Size = UDim2.new(0, 100, 0, 32)
+	intBox.Position = UDim2.new(0, 14, 0, 200)
+	intBox.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+	intBox.Text = tostring(point.intervalMs)
+	intBox.TextColor3 = Color3.new(1, 1, 1)
+	intBox.TextSize = 14
+	intBox.Font = Enum.Font.Gotham
+	intBox.ClearTextOnFocus = false
+	intBox.BorderSizePixel = 0
+	intBox.ZIndex = 42
+	intBox.Parent = sett
+
+	local intCorner = Instance.new("UICorner")
+	intCorner.CornerRadius = UDim.new(0, 8)
+	intCorner.Parent = intBox
+
+	-- Вкл / Выкл
+	local enableBtn = Instance.new("TextButton")
+	enableBtn.Size = UDim2.new(0, 110, 0, 32)
+	enableBtn.Position = UDim2.new(0, 130, 0, 200)
+	enableBtn.BackgroundColor3 = point.enabled and Color3.fromRGB(40, 180, 80) or Color3.fromRGB(100, 100, 110)
+	enableBtn.Text = point.enabled and "Включена" or "Выключена"
+	enableBtn.TextColor3 = Color3.new(1, 1, 1)
+	enableBtn.TextSize = 13
+	enableBtn.Font = Enum.Font.GothamBold
+	enableBtn.BorderSizePixel = 0
+	enableBtn.ZIndex = 42
+	enableBtn.Parent = sett
+
+	local enCorner = Instance.new("UICorner")
+	enCorner.CornerRadius = UDim.new(0, 8)
+	enCorner.Parent = enableBtn
+
+	enableBtn.MouseButton1Click:Connect(function()
+		point.enabled = not point.enabled
+		enableBtn.BackgroundColor3 = point.enabled and Color3.fromRGB(40, 180, 80) or Color3.fromRGB(100, 100, 110)
+		enableBtn.Text = point.enabled and "Включена" or "Выключена"
+	end)
+
+	-- Порядок
+	local orderLabel = Instance.new("TextLabel")
+	orderLabel.Size = UDim2.new(1, -28, 0, 20)
+	orderLabel.Position = UDim2.new(0, 14, 0, 245)
+	orderLabel.BackgroundTransparency = 1
+	orderLabel.Text = "Порядок в очереди: #" .. point.order
+	orderLabel.TextColor3 = Color3.fromRGB(160, 160, 170)
+	orderLabel.TextSize = 13
+	orderLabel.Font = Enum.Font.Gotham
+	orderLabel.TextXAlignment = Enum.TextXAlignment.Left
+	orderLabel.ZIndex = 42
+	orderLabel.Parent = sett
+
+	-- Удалить
+	local delBtn = Instance.new("TextButton")
+	delBtn.Size = UDim2.new(1, -28, 0, 38)
+	delBtn.Position = UDim2.new(0, 14, 1, -55)
+	delBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+	delBtn.Text = "Удалить точку"
+	delBtn.TextColor3 = Color3.new(1, 1, 1)
+	delBtn.TextSize = 14
+	delBtn.Font = Enum.Font.GothamBold
+	delBtn.BorderSizePixel = 0
+	delBtn.ZIndex = 42
+	delBtn.Parent = sett
+
+	local delCorner = Instance.new("UICorner")
+	delCorner.CornerRadius = UDim.new(0, 8)
+	delCorner.Parent = delBtn
+
+	local function saveAndClose()
+		local num = tonumber(intBox.Text)
+		if num and num > 0 then
+			if num < MIN_INTERVAL_MS then
+				createDialog("Внимание!", "Интервал меньше " .. MIN_INTERVAL_MS .. " мс может вызывать лаги.\nВсё равно установить?", "Да", "Нет",
+					function()
+						point.intervalMs = num
+						point.name = nameBox.Text ~= "" and nameBox.Text or point.name
+						if point.listName then point.listName.Text = point.name end
+						overlay:Destroy()
+					end, function() end)
+			else
+				point.intervalMs = num
+				point.name = nameBox.Text ~= "" and nameBox.Text or point.name
+				if point.listName then point.listName.Text = point.name end
+				overlay:Destroy()
+			end
+		else
+			overlay:Destroy()
+		end
+	end
+
+	closeSett.MouseButton1Click:Connect(saveAndClose)
+
+	delBtn.MouseButton1Click:Connect(function()
+		createDialog("Удалить точку?", "Точка \"" .. point.name .. "\" будет удалена.", "Удалить", "Отмена",
+			function()
+				if point.visual then point.visual:Destroy() end
+				if point.listBtn then point.listBtn:Destroy() end
+				for i, p in ipairs(points) do
+					if p.id == point.id then
+						table.remove(points, i)
+						break
+					end
+				end
+				updatePointsCanvas()
+				overlay:Destroy()
+			end, function() end)
+	end)
+end
+
+local function createPointListItem(point)
+	local item = Instance.new("TextButton")
+	item.Size = UDim2.new(1, -4, 0, 44)
+	item.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+	item.Text = ""
+	item.BorderSizePixel = 0
+	item.LayoutOrder = point.order
+	item.Parent = pointsScroll
+
+	local iCorner = Instance.new("UICorner")
+	iCorner.CornerRadius = UDim.new(0, 8)
+	iCorner.Parent = item
+
+	local colorDot = Instance.new("Frame")
+	colorDot.Size = UDim2.new(0, 14, 0, 14)
+	colorDot.Position = UDim2.new(0, 12, 0.5, -7)
+	colorDot.BackgroundColor3 = point.color
+	colorDot.BorderSizePixel = 0
+	colorDot.Parent = item
+
+	local dotCorner = Instance.new("UICorner")
+	dotCorner.CornerRadius = UDim.new(1, 0)
+	dotCorner.Parent = colorDot
+
+	local nameL = Instance.new("TextLabel")
+	nameL.Size = UDim2.new(1, -90, 1, 0)
+	nameL.Position = UDim2.new(0, 36, 0, 0)
+	nameL.BackgroundTransparency = 1
+	nameL.Text = point.name
+	nameL.TextColor3 = Color3.fromRGB(230, 230, 235)
+	nameL.TextSize = 14
+	nameL.Font = Enum.Font.Gotham
+	nameL.TextXAlignment = Enum.TextXAlignment.Left
+	nameL.Parent = item
+
+	local orderL = Instance.new("TextLabel")
+	orderL.Size = UDim2.new(0, 40, 1, 0)
+	orderL.Position = UDim2.new(1, -48, 0, 0)
+	orderL.BackgroundTransparency = 1
+	orderL.Text = "#" .. point.order
+	orderL.TextColor3 = Color3.fromRGB(140, 140, 150)
+	orderL.TextSize = 13
+	orderL.Font = Enum.Font.Gotham
+	orderL.Parent = item
+
+	point.listBtn = item
+	point.listName = nameL
+
+	item.MouseButton1Click:Connect(function()
+		openPointSettings(point)
+	end)
+
+	updatePointsCanvas()
+end
+
+local function addPoint()
+	local id = HttpService:GenerateGUID(false)
+	local order = getNextOrder()
+	local pos = Vector2.new(180 + #points * 50, 220 + #points * 30)
+
+	local point = {
+		id = id,
+		name = "Точка " .. order,
+		color = DEFAULT_COLOR,
+		intervalMs = DEFAULT_INTERVAL,
+		enabled = true,
+		order = order,
+		position = pos,
+	}
+
+	table.insert(points, point)
+	createPointVisual(point)
+	createPointListItem(point)
+end
+
+-- ====================== КЛИКИ ======================
+
+local lastClickTimes = {}
+local clickThread = nil
+
+local function doClick(pos)
+	-- Более точный клик по центру
+	VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
+	task.wait()
+	VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 1)
+end
+
+local function stopClicking()
+	isRunning = false
+	startStopBtn.Text = "▶  СТАРТ"
+	startStopBtn.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+end
+
+local function startClicking()
+	if isRunning then return end
+	if #points == 0 then return end
+
+	isRunning = true
+	startStopBtn.Text = "■  СТОП"
+	startStopBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+
+	clickThread = task.spawn(function()
+		while isRunning do
+			if mode == "Separate" then
+				local now = tick()
+				for _, point in ipairs(points) do
+					if point.enabled and point.visual then
+						local last = lastClickTimes[point.id] or 0
+						if (now - last) * 1000 >= point.intervalMs then
+							-- Берём актуальную позицию
+							local pos = Vector2.new(
+								point.visual.AbsolutePosition.X + point.visual.AbsoluteSize.X / 2,
+								point.visual.AbsolutePosition.Y + point.visual.AbsoluteSize.Y / 2
+							)
+							doClick(pos)
+							lastClickTimes[point.id] = now
+						end
+					end
+				end
+				task.wait(0.01)
+			else
+				local sorted = {}
+				for _, p in ipairs(points) do
+					if p.enabled and p.visual then table.insert(sorted, p) end
+				end
+				table.sort(sorted, function(a, b) return a.order < b.order end)
+
+				for _, point in ipairs(sorted) do
+					if not isRunning then break end
+					local pos = Vector2.new(
+						point.visual.AbsolutePosition.X + point.visual.AbsoluteSize.X / 2,
+						point.visual.AbsolutePosition.Y + point.visual.AbsoluteSize.Y / 2
+					)
+					doClick(pos)
+					task.wait(point.intervalMs / 1000)
+				end
+			end
+		end
+	end)
+end
+
+-- ====================== СОБЫТИЯ ======================
+
+addPointBtn.MouseButton1Click:Connect(addPoint)
+
+startStopBtn.MouseButton1Click:Connect(function()
+	if isRunning then
+		stopClicking()
+	else
+		startClicking()
+	end
+end)
+
+separateBtn.MouseButton1Click:Connect(function()
+	mode = "Separate"
+	separateBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 220)
+	togetherBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+end)
+
+togetherBtn.MouseButton1Click:Connect(function()
+	mode = "Together"
+	togetherBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 220)
+	separateBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+end)
+
+minimizeBtn.MouseButton1Click:Connect(function()
+	mainFrame.Visible = false
+	iconBtn.Visible = true
+	minimized = true
+end)
+
+iconBtn.MouseButton1Click:Connect(function()
+	mainFrame.Visible = true
+	iconBtn.Visible = false
+	minimized = false
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	createDialog("Закрыть скрипт полностью?", "Интерфейс будет удалён, автокликер остановится.", "Да", "Нет",
+		function()
+			stopClicking()
+			for _, p in ipairs(points) do
+				if p.visual then p.visual:Destroy() end
+			end
+			screenGui:Destroy()
+		end, function() end)
+end)
+
+print("[Автокликер v2] Загружен — поддержка мобилы + исправленный драг")
