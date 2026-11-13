@@ -1,0 +1,1201 @@
+
+--[[
+    ROBLOX ULTIMATE X
+    Version: 1.0
+    Target: Delta Android
+    Module: Premium UI Core
+]]
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+
+local Player = Players.LocalPlayer
+
+-- Remove previous instance
+pcall(function()
+    CoreGui:FindFirstChild("UltimateX"):Destroy()
+end)
+
+-- Theme
+local Theme = {
+    Background = Color3.fromRGB(13, 13, 20),
+    Panel = Color3.fromRGB(21, 21, 32),
+    Sidebar = Color3.fromRGB(17, 17, 27),
+    Accent = Color3.fromRGB(153, 92, 255),
+    Accent2 = Color3.fromRGB(91, 115, 255),
+    Text = Color3.fromRGB(245, 245, 255),
+    Muted = Color3.fromRGB(145, 145, 165),
+    Border = Color3.fromRGB(48, 43, 65)
+}
+
+local function Create(class, properties, parent)
+    local obj = Instance.new(class)
+    for k, v in pairs(properties) do
+        obj[k] = v
+    end
+    obj.Parent = parent
+    return obj
+end
+
+local function Corner(parent, radius)
+    return Create("UICorner", {
+        CornerRadius = UDim.new(0, radius or 10)
+    }, parent)
+end
+
+local function Stroke(parent, color)
+    return Create("UIStroke", {
+        Color = color or Theme.Border,
+        Thickness = 1,
+        Transparency = 0.25
+    }, parent)
+end
+
+local function Animate(object, properties, duration)
+    TweenService:Create(
+        object,
+        TweenInfo.new(duration or 0.2, Enum.EasingStyle.Quart,
+            Enum.EasingDirection.Out),
+        properties
+    ):Play()
+end
+
+-- Screen
+local Screen = Create("ScreenGui", {
+    Name = "UltimateX",
+    ResetOnSpawn = false,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+}, CoreGui)
+
+-- Main window
+local Main = Create("Frame", {
+    Name = "Main",
+    Size = UDim2.fromOffset(650, 410),
+    Position = UDim2.new(0.5, -325, 0.5, -205),
+    BackgroundColor3 = Theme.Background,
+    BorderSizePixel = 0,
+    ClipsDescendants = true
+}, Screen)
+
+Corner(Main, 15)
+Stroke(Main, Theme.Border)
+
+-- Gradient accent
+local TopLine = Create("Frame", {
+    Size = UDim2.new(1, 0, 0, 3),
+    BackgroundColor3 = Theme.Accent,
+    BorderSizePixel = 0
+}, Main)
+
+Create("UIGradient", {
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Theme.Accent),
+        ColorSequenceKeypoint.new(1, Theme.Accent2)
+    })
+}, TopLine)
+
+-- Header
+local Header = Create("Frame", {
+    Size = UDim2.new(1, 0, 0, 58),
+    BackgroundColor3 = Theme.Background,
+    BorderSizePixel = 0
+}, Main)
+
+local Logo = Create("TextLabel", {
+    Position = UDim2.fromOffset(18, 9),
+    Size = UDim2.fromOffset(190, 25),
+    BackgroundTransparency = 1,
+    Text = "ULTIMATE X",
+    TextColor3 = Theme.Text,
+    TextSize = 20,
+    Font = Enum.Font.GothamBold,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, Header)
+
+local Version = Create("TextLabel", {
+    Position = UDim2.fromOffset(19, 33),
+    Size = UDim2.fromOffset(150, 15),
+    BackgroundTransparency = 1,
+    Text = "ADVANCED  /  PREMIUM",
+    TextColor3 = Theme.Accent,
+    TextSize = 9,
+    Font = Enum.Font.GothamBold,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, Header)
+
+local Close = Create("TextButton", {
+    Size = UDim2.fromOffset(32, 32),
+    Position = UDim2.new(1, -43, 0, 12),
+    BackgroundColor3 = Color3.fromRGB(42, 30, 48),
+    Text = "×",
+    TextSize = 22,
+    TextColor3 = Theme.Text,
+    Font = Enum.Font.GothamBold,
+    BorderSizePixel = 0
+}, Header)
+Corner(Close, 9)
+
+local Minimize = Create("TextButton", {
+    Size = UDim2.fromOffset(32, 32),
+    Position = UDim2.new(1, -83, 0, 12),
+    BackgroundColor3 = Theme.Panel,
+    Text = "−",
+    TextSize = 20,
+    TextColor3 = Theme.Text,
+    Font = Enum.Font.GothamBold,
+    BorderSizePixel = 0
+}, Header)
+Corner(Minimize, 9)
+
+-- Sidebar
+local Sidebar = Create("Frame", {
+    Position = UDim2.fromOffset(0, 58),
+    Size = UDim2.new(0, 155, 1, -58),
+    BackgroundColor3 = Theme.Sidebar,
+    BorderSizePixel = 0
+}, Main)
+
+local SideTitle = Create("TextLabel", {
+    Position = UDim2.fromOffset(15, 15),
+    Size = UDim2.new(1, -25, 0, 20),
+    BackgroundTransparency = 1,
+    Text = "NAVIGATION",
+    TextColor3 = Theme.Muted,
+    TextSize = 10,
+    Font = Enum.Font.GothamBold,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, Sidebar)
+
+local Nav = Create("Frame", {
+    Position = UDim2.fromOffset(8, 43),
+    Size = UDim2.new(1, -16, 1, -50),
+    BackgroundTransparency = 1
+}, Sidebar)
+
+Create("UIListLayout", {
+    Padding = UDim.new(0, 6),
+    SortOrder = Enum.SortOrder.LayoutOrder
+}, Nav)
+
+-- Content
+local Content = Create("Frame", {
+    Position = UDim2.fromOffset(155, 58),
+    Size = UDim2.new(1, -155, 1, -58),
+    BackgroundColor3 = Theme.Background,
+    BorderSizePixel = 0
+}, Main)
+
+local Pages = {}
+local Buttons = {}
+local CurrentPage = nil
+
+local function Notify(title, message)
+    local Toast = Create("Frame", {
+        Size = UDim2.fromOffset(235, 65),
+        Position = UDim2.new(1, 250, 1, -85),
+        BackgroundColor3 = Theme.Panel,
+        BorderSizePixel = 0,
+        ZIndex = 20
+    }, Screen)
+    Corner(Toast, 10)
+    Stroke(Toast, Theme.Accent)
+
+    Create("TextLabel", {
+        Position = UDim2.fromOffset(12, 7),
+        Size = UDim2.new(1, -20, 0, 20),
+        BackgroundTransparency = 1,
+        Text = title,
+        TextColor3 = Theme.Text,
+        TextSize = 13,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 21
+    }, Toast)
+
+    Create("TextLabel", {
+        Position = UDim2.fromOffset(12, 30),
+        Size = UDim2.new(1, -20, 0, 23),
+        BackgroundTransparency = 1,
+        Text = message,
+        TextColor3 = Theme.Muted,
+        TextSize = 10,
+        Font = Enum.Font.Gotham,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 21
+    }, Toast)
+
+    Animate(Toast, {
+        Position = UDim2.new(1, -250, 1, -85)
+    }, 0.35)
+
+    task.delay(3, function()
+        if Toast.Parent then
+            Animate(Toast, {
+                Position = UDim2.new(1, 250, 1, -85)
+            }, 0.3)
+            task.wait(0.35)
+            Toast:Destroy()
+        end
+    end)
+end
+
+local function CreatePage(name, description)
+    local Page = Create("ScrollingFrame", {
+        Name = name,
+        Size = UDim2.new(1, -30, 1, -30),
+        Position = UDim2.fromOffset(15, 15),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 3,
+        ScrollBarImageColor3 = Theme.Accent,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        Visible = false
+    }, Content)
+
+    Create("UIListLayout", {
+        Padding = UDim.new(0, 10),
+        SortOrder = Enum.SortOrder.LayoutOrder
+    }, Page)
+
+    Create("TextLabel", {
+        Size = UDim2.new(1, -5, 0, 32),
+        BackgroundTransparency = 1,
+        Text = name,
+        TextColor3 = Theme.Text,
+        TextSize = 23,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, Page)
+
+    Create("TextLabel", {
+        Size = UDim2.new(1, -5, 0, 22),
+        BackgroundTransparency = 1,
+        Text = description,
+        TextColor3 = Theme.Muted,
+        TextSize = 11,
+        Font = Enum.Font.Gotham,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, Page)
+
+    Pages[name] = Page
+    return Page
+end
+
+local function AddButton(page, title, description, callback)
+    local Button = Create("TextButton", {
+        Size = UDim2.new(1, -5, 0, 65),
+        BackgroundColor3 = Theme.Panel,
+        BorderSizePixel = 0,
+        Text = "",
+        AutoButtonColor = false
+    }, page)
+
+    Corner(Button, 10)
+    Stroke(Button)
+
+    Create("TextLabel", {
+        Position = UDim2.fromOffset(13, 10),
+        Size = UDim2.new(1, -25, 0, 20),
+        BackgroundTransparency = 1,
+        Text = title,
+        TextColor3 = Theme.Text,
+        TextSize = 13,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, Button)
+
+    Create("TextLabel", {
+        Position = UDim2.fromOffset(13, 33),
+        Size = UDim2.new(1, -25, 0, 20),
+        BackgroundTransparency = 1,
+        Text = description or "",
+        TextColor3 = Theme.Muted,
+        TextSize = 10,
+        Font = Enum.Font.Gotham,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, Button)
+
+    Button.MouseEnter:Connect(function()
+        Animate(Button, {
+            BackgroundColor3 = Color3.fromRGB(37, 31, 55)
+        })
+    end)
+
+    Button.MouseLeave:Connect(function()
+        Animate(Button, {
+            BackgroundColor3 = Theme.Panel
+        })
+    end)
+
+    Button.Activated:Connect(function()
+        if callback then callback() end
+    end)
+
+    return Button
+end
+
+local function AddTab(name, emoji, description)
+    local Page = CreatePage(name, description)
+
+    local Button = Create("TextButton", {
+        Size = UDim2.new(1, 0, 0, 37),
+        BackgroundColor3 = Theme.Sidebar,
+        Text = emoji .. "   " .. name,
+        TextColor3 = Theme.Muted,
+        TextSize = 11,
+        Font = Enum.Font.GothamMedium,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BorderSizePixel = 0,
+        AutoButtonColor = false
+    }, Nav)
+
+    Create("UIPadding", {
+        PaddingLeft = UDim.new(0, 10)
+    }, Button)
+
+    Corner(Button, 8)
+
+    Buttons[name] = Button
+
+    Button.Activated:Connect(function()
+        for n, p in pairs(Pages) do
+            p.Visible = n == name
+            Animate(Buttons[n], {
+                BackgroundColor3 = n == name
+                    and Color3.fromRGB(47, 35, 70)
+                    or Theme.Sidebar,
+                TextColor3 = n == name
+                    and Theme.Text or Theme.Muted
+            })
+        end
+        CurrentPage = name
+    end)
+
+    return Page
+end
+
+-- Pages
+local Dashboard = AddTab(
+    "Dashboard", "⌂", "Your experimental control center."
+)
+
+local PlayerLab = AddTab(
+    "Player Lab", "♙", "Local character information."
+)
+
+local MovementLab = AddTab(
+    "Movement Lab", "↗", "Movement experiment tools."
+)
+
+local VisualLab = AddTab(
+    "Visual Lab", "◉", "Visual testing and diagnostics."
+)
+
+local LuaConsole = AddTab(
+    "Lua Console", "⌘", "Your local development workspace."
+)
+
+local ScriptHub = AddTab(
+    "Script Hub", "▤", "Manage your own scripts."
+)
+
+local Settings = AddTab(
+    "Settings", "⚙", "Customize your experience."
+)
+
+-- Dashboard
+AddButton(Dashboard, "Welcome to Ultimate X",
+    "Advanced experimental environment.",
+    function()
+        Notify("Ultimate X", "Welcome back!")
+    end
+)
+
+AddButton(Dashboard, "Player Information",
+    "Display your current player name.",
+    function()
+        Notify("Player", Player.Name)
+    end
+)
+
+AddButton(Dashboard, "Interface Status",
+    "Check whether the panel is running.",
+    function()
+        Notify("Status", "All UI modules are active.")
+    end
+)
+
+-- Player Lab
+AddButton(PlayerLab, "Character Status",
+    "Check your character and humanoid.",
+    function()
+        local char = Player.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        Notify("Character",
+            hum and "Character is available." or "Character unavailable.")
+    end
+)
+
+-- Movement Lab
+AddButton(MovementLab, "Movement Diagnostics",
+    "Inspect movement properties.",
+    function()
+        local char = Player.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            Notify("Movement",
+                "WalkSpeed: " .. tostring(hum.WalkSpeed))
+        else
+            Notify("Movement", "Character unavailable.")
+        end
+    end
+)
+
+-- Visual Lab
+AddButton(VisualLab, "Visual Diagnostics",
+    "Inspect camera availability.",
+    function()
+        Notify("Visual Lab",
+            workspace.CurrentCamera and "Camera online." or "No camera.")
+    end
+)
+
+-- Console placeholder
+AddButton(LuaConsole, "Console Module",
+    "Console interface will be added in Part 2.",
+    function()
+        Notify("Console", "Module not installed yet.")
+    end
+)
+
+-- Script Hub
+AddButton(ScriptHub, "Script Library",
+    "Your personal script collection.",
+    function()
+        Notify("Script Hub", "Library is ready for expansion.")
+    end
+)
+
+-- Settings
+AddButton(Settings, "Interface Information",
+    "Ultimate X Premium UI Core.",
+    function()
+        Notify("Settings", "Version 1.0")
+    end
+)
+
+-- Drag support
+local dragging = false
+local dragStart, startPos
+
+Header.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = Main.Position
+    end
+end)
+
+UIS.InputChanged:Connect(function(input)
+    if dragging and (
+        input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch
+    ) then
+        local delta = input.Position - dragStart
+        Main.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+-- Minimize / restore
+local minimized = false
+
+Minimize.Activated:Connect(function()
+    minimized = not minimized
+
+    Animate(Main, {
+        Size = minimized
+            and UDim2.fromOffset(650, 58)
+            or UDim2.fromOffset(650, 410)
+    }, 0.25)
+
+    Sidebar.Visible = not minimized
+    Content.Visible = not minimized
+end)
+
+-- Close
+Close.Activated:Connect(function()
+    Screen:Destroy()
+end)
+
+-- Initial page
+Buttons.Dashboard:Activate()
+
+Notify("Ultimate X", "Panel successfully initialized.")
+print("[Ultimate X] UI Core loaded.")
+
+--==================================================
+-- ULTIMATE X | PART 2
+-- ADVANCED LUA CONSOLE
+-- Append to Part 1
+--==================================================
+
+local ConsoleState = {
+    History = {},
+    HistoryIndex = 0,
+    MaxLines = 100
+}
+
+local ConsolePage = LuaConsole
+
+-- Console container
+local Console = Create("Frame", {
+    Name = "ConsoleContainer",
+    Size = UDim2.new(1, -5, 0, 285),
+    BackgroundColor3 = Theme.Panel,
+    BorderSizePixel = 0
+}, ConsolePage)
+
+Corner(Console, 12)
+Stroke(Console)
+
+-- Console header
+local ConsoleHeader = Create("Frame", {
+    Size = UDim2.new(1, 0, 0, 35),
+    BackgroundColor3 = Color3.fromRGB(26, 25, 39),
+    BorderSizePixel = 0
+}, Console)
+
+Create("TextLabel", {
+    Position = UDim2.fromOffset(12, 0),
+    Size = UDim2.new(0.7, 0, 1, 0),
+    BackgroundTransparency = 1,
+    Text = "●  TERMINAL",
+    TextColor3 = Theme.Accent,
+    Font = Enum.Font.GothamBold,
+    TextSize = 11,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, ConsoleHeader)
+
+local ClearButton = Create("TextButton", {
+    Size = UDim2.fromOffset(55, 23),
+    Position = UDim2.new(1, -65, 0, 6),
+    BackgroundColor3 = Theme.Background,
+    Text = "CLEAR",
+    TextColor3 = Theme.Muted,
+    Font = Enum.Font.GothamBold,
+    TextSize = 9,
+    BorderSizePixel = 0
+}, ConsoleHeader)
+
+Corner(ClearButton, 5)
+
+-- Output
+local Output = Create("ScrollingFrame", {
+    Name = "ConsoleOutput",
+    Position = UDim2.fromOffset(10, 43),
+    Size = UDim2.new(1, -20, 0, 175),
+    BackgroundColor3 = Color3.fromRGB(12, 12, 18),
+    BorderSizePixel = 0,
+    ScrollBarThickness = 3,
+    ScrollBarImageColor3 = Theme.Accent,
+    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    CanvasSize = UDim2.new(0, 0, 0, 0)
+}, Console)
+
+Corner(Output, 7)
+
+local OutputLayout = Create("UIListLayout", {
+    Padding = UDim.new(0, 4),
+    SortOrder = Enum.SortOrder.LayoutOrder
+}, Output)
+
+Create("UIPadding", {
+    PaddingTop = UDim.new(0, 8),
+    PaddingLeft = UDim.new(0, 8),
+    PaddingRight = UDim.new(0, 8),
+    PaddingBottom = UDim.new(0, 8)
+}, Output)
+
+-- Input
+local Input = Create("TextBox", {
+    Name = "CommandInput",
+    Position = UDim2.fromOffset(10, 228),
+    Size = UDim2.new(1, -95, 0, 38),
+    BackgroundColor3 = Color3.fromRGB(12, 12, 18),
+    Text = "",
+    PlaceholderText = "Enter command...",
+    PlaceholderColor3 = Theme.Muted,
+    TextColor3 = Theme.Text,
+    TextSize = 12,
+    Font = Enum.Font.Code,
+    ClearTextOnFocus = false,
+    BorderSizePixel = 0
+}, Console)
+
+Corner(Input, 7)
+
+local ExecuteButton = Create("TextButton", {
+    Position = UDim2.new(1, -75, 0, 228),
+    Size = UDim2.fromOffset(65, 38),
+    BackgroundColor3 = Theme.Accent,
+    Text = "RUN",
+    TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBold,
+    TextSize = 11,
+    BorderSizePixel = 0
+}, Console)
+
+Corner(ExecuteButton, 7)
+
+-- Output function
+local function Log(message, color)
+    local Entry = Create("TextLabel", {
+        Size = UDim2.new(1, -5, 0, 20),
+        BackgroundTransparency = 1,
+        Text = tostring(message),
+        TextColor3 = color or Theme.Text,
+        Font = Enum.Font.Code,
+        TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextWrapped = true,
+        AutomaticSize = Enum.AutomaticSize.Y
+    }, Output)
+
+    Entry.LayoutOrder = #Output:GetChildren()
+
+    local entries = {}
+    for _, child in ipairs(Output:GetChildren()) do
+        if child:IsA("TextLabel") then
+            table.insert(entries, child)
+        end
+    end
+
+    while #entries > ConsoleState.MaxLines do
+        entries[1]:Destroy()
+        table.remove(entries, 1)
+    end
+
+    task.defer(function()
+        Output.CanvasPosition = Vector2.new(
+            0,
+            math.max(0, OutputLayout.AbsoluteContentSize.Y)
+        )
+    end)
+end
+
+local function Success(message)
+    Log("[SUCCESS] " .. message, Color3.fromRGB(110, 235, 160))
+end
+
+local function Error(message)
+    Log("[ERROR] " .. message, Color3.fromRGB(255, 105, 115))
+end
+
+local function Info(message)
+    Log("[INFO] " .. message, Theme.Accent2)
+end
+
+-- Character helpers
+local function GetCharacter()
+    return Player.Character
+end
+
+local function GetHumanoid()
+    local character = GetCharacter()
+    if not character then return nil end
+
+    return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function GetRoot()
+    local character = GetCharacter()
+    if not character then return nil end
+
+    return character:FindFirstChild("HumanoidRootPart")
+end
+
+-- Commands
+local Commands = {}
+
+Commands.help = function()
+    Info("AVAILABLE COMMANDS")
+    Log("help       - Show commands")
+    Log("clear      - Clear terminal")
+    Log("whoami     - Player information")
+    Log("health     - Character health")
+    Log("position   - Character coordinates")
+    Log("speed      - Movement speed")
+    Log("camera     - Camera information")
+end
+
+Commands.clear = function()
+    for _, child in ipairs(Output:GetChildren()) do
+        if child:IsA("TextLabel") then
+            child:Destroy()
+        end
+    end
+    Success("Terminal cleared.")
+end
+
+Commands.whoami = function()
+    Success("Username: " .. Player.Name)
+    Log("Display name: " .. Player.DisplayName)
+    Log("User ID: " .. tostring(Player.UserId))
+end
+
+Commands.health = function()
+    local humanoid = GetHumanoid()
+
+    if not humanoid then
+        Error("Character not found.")
+        return
+    end
+
+    Success("Health: " .. tostring(humanoid.Health))
+    Log("Max health: " .. tostring(humanoid.MaxHealth))
+end
+
+Commands.position = function()
+    local root = GetRoot()
+
+    if not root then
+        Error("Character root unavailable.")
+        return
+    end
+
+    local pos = root.Position
+
+    Success("Position detected.")
+    Log("X: " .. string.format("%.2f", pos.X))
+    Log("Y: " .. string.format("%.2f", pos.Y))
+    Log("Z: " .. string.format("%.2f", pos.Z))
+end
+
+Commands.speed = function()
+    local humanoid = GetHumanoid()
+
+    if not humanoid then
+        Error("Humanoid unavailable.")
+        return
+    end
+
+    Success("WalkSpeed: " .. tostring(humanoid.WalkSpeed))
+    Log("JumpPower: " .. tostring(humanoid.JumpPower))
+end
+
+Commands.camera = function()
+    local camera = workspace.CurrentCamera
+
+    if not camera then
+        Error("Camera unavailable.")
+        return
+    end
+
+    Success("Camera online.")
+    Log("FOV: " .. tostring(camera.FieldOfView))
+    Log("Type: " .. tostring(camera.CameraType))
+end
+
+-- Command processor
+local function ExecuteCommand(raw)
+    local command = string.lower(
+        string.match(raw, "^%s*(.-)%s*$") or ""
+    )
+
+    if command == "" then
+        return
+    end
+
+    Log("> " .. command, Theme.Accent)
+
+    table.insert(ConsoleState.History, command)
+    ConsoleState.HistoryIndex = #ConsoleState.History
+
+    local action = Commands[command]
+
+    if not action then
+        Error("Unknown command: " .. command)
+        Info("Type 'help' for available commands.")
+        return
+    end
+
+    local ok, result = pcall(action)
+
+    if not ok then
+        Error("Execution failed: " .. tostring(result))
+    end
+end
+
+-- Input events
+local function RunInput()
+    local value = Input.Text
+    Input.Text = ""
+    ExecuteCommand(value)
+end
+
+ExecuteButton.Activated:Connect(RunInput)
+
+Input.FocusLost:Connect(function(enterPressed)
+    if enterPressed then
+        RunInput()
+    end
+end)
+
+ClearButton.Activated:Connect(function()
+    Commands.clear()
+end)
+
+-- Quick command buttons
+local QuickFrame = Create("Frame", {
+    Size = UDim2.new(1, -5, 0, 75),
+    BackgroundTransparency = 1
+}, ConsolePage)
+
+Create("UIListLayout", {
+    FillDirection = Enum.FillDirection.Horizontal,
+    Padding = UDim.new(0, 7),
+    SortOrder = Enum.SortOrder.LayoutOrder
+}, QuickFrame)
+
+local function QuickButton(label, command)
+    local Button = Create("TextButton", {
+        Size = UDim2.fromOffset(85, 30),
+        BackgroundColor3 = Theme.Panel,
+        Text = label,
+        TextColor3 = Theme.Text,
+        TextSize = 10,
+        Font = Enum.Font.GothamBold,
+        BorderSizePixel = 0
+    }, QuickFrame)
+
+    Corner(Button, 7)
+
+    Button.Activated:Connect(function()
+        ExecuteCommand(command)
+    end)
+
+    return Button
+end
+
+QuickButton("HELP", "help")
+QuickButton("PLAYER", "whoami")
+QuickButton("HEALTH", "health")
+QuickButton("POSITION", "position")
+QuickButton("SPEED", "speed")
+
+-- Welcome messages
+Log("ULTIMATE X TERMINAL", Theme.Accent)
+Log("Advanced Console initialized.")
+Log("Type 'help' to see available commands.")
+Success("Console ready.")
+
+print("[Ultimate X] Part 2 loaded.")
+
+--==================================================
+-- ULTIMATE X v2.0
+-- PART 3/1 - PLAYER LAB
+-- Append after Part 2
+--==================================================
+
+local RunService = game:GetService("RunService")
+
+local Lab = {
+    Enabled = false,
+    Connection = nil,
+    RefreshRate = 0.25,
+    LastUpdate = 0
+}
+
+-- Main telemetry card
+local Telemetry = Create("Frame", {
+    Name = "Telemetry",
+    Size = UDim2.new(1, -5, 0, 185),
+    BackgroundColor3 = Theme.Panel,
+    BorderSizePixel = 0
+}, PlayerLab)
+
+Corner(Telemetry, 12)
+Stroke(Telemetry)
+
+local TelemetryTitle = Create("TextLabel", {
+    Position = UDim2.fromOffset(13, 9),
+    Size = UDim2.new(0.7, 0, 0, 22),
+    BackgroundTransparency = 1,
+    Text = "LIVE TELEMETRY",
+    TextColor3 = Theme.Accent,
+    TextSize = 12,
+    Font = Enum.Font.GothamBold,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, Telemetry)
+
+local StatusDot = Create("Frame", {
+    Position = UDim2.new(1, -25, 0, 14),
+    Size = UDim2.fromOffset(9, 9),
+    BackgroundColor3 = Color3.fromRGB(110, 110, 125),
+    BorderSizePixel = 0
+}, Telemetry)
+
+Corner(StatusDot, 20)
+
+local Divider = Create("Frame", {
+    Position = UDim2.fromOffset(12, 37),
+    Size = UDim2.new(1, -24, 0, 1),
+    BackgroundColor3 = Theme.Border,
+    BorderSizePixel = 0
+}, Telemetry)
+
+local function CreateStat(name, y)
+    local Container = Create("Frame", {
+        Position = UDim2.fromOffset(12, y),
+        Size = UDim2.new(1, -24, 0, 23),
+        BackgroundTransparency = 1
+    }, Telemetry)
+
+    Create("TextLabel", {
+        Size = UDim2.new(0.43, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = name,
+        TextColor3 = Theme.Muted,
+        TextSize = 11,
+        Font = Enum.Font.GothamMedium,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, Container)
+
+    local Value = Create("TextLabel", {
+        Position = UDim2.new(0.43, 0, 0, 0),
+        Size = UDim2.new(0.57, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "--",
+        TextColor3 = Theme.Text,
+        TextSize = 11,
+        Font = Enum.Font.Code,
+        TextXAlignment = Enum.TextXAlignment.Right
+    }, Container)
+
+    return Value
+end
+
+local Stats = {
+    Health = CreateStat("HEALTH", 45),
+    Position = CreateStat("POSITION", 69),
+    Speed = CreateStat("WALKSPEED", 93),
+    Jump = CreateStat("JUMP POWER", 117),
+    State = CreateStat("STATE", 141),
+    Camera = CreateStat("CAMERA FOV", 165)
+}
+
+-- Health progress bar
+local HealthBackground = Create("Frame", {
+    Position = UDim2.fromOffset(12, 191),
+    Size = UDim2.new(1, -24, 0, 7),
+    BackgroundColor3 = Color3.fromRGB(42, 40, 52),
+    BorderSizePixel = 0,
+    Visible = false
+}, Telemetry)
+
+Corner(HealthBackground, 5)
+
+local HealthFill = Create("Frame", {
+    Size = UDim2.new(1, 0, 1, 0),
+    BackgroundColor3 = Color3.fromRGB(100, 225, 150),
+    BorderSizePixel = 0
+}, HealthBackground)
+
+Corner(HealthFill, 5)
+
+-- Character information
+local InfoCard = Create("Frame", {
+    Size = UDim2.new(1, -5, 0, 90),
+    BackgroundColor3 = Theme.Panel,
+    BorderSizePixel = 0
+}, PlayerLab)
+
+Corner(InfoCard, 12)
+Stroke(InfoCard)
+
+Create("TextLabel", {
+    Position = UDim2.fromOffset(13, 9),
+    Size = UDim2.new(1, -25, 0, 20),
+    BackgroundTransparency = 1,
+    Text = "CHARACTER INFORMATION",
+    TextColor3 = Theme.Accent,
+    TextSize = 11,
+    Font = Enum.Font.GothamBold,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, InfoCard)
+
+local CharacterInfo = Create("TextLabel", {
+    Position = UDim2.fromOffset(13, 33),
+    Size = UDim2.new(1, -25, 0, 45),
+    BackgroundTransparency = 1,
+    Text = "Waiting for character...",
+    TextColor3 = Theme.Muted,
+    TextSize = 11,
+    Font = Enum.Font.Code,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top
+}, InfoCard)
+
+-- Monitoring controls
+local MonitorButton = AddButton(
+    PlayerLab,
+    "Start Live Monitoring",
+    "Automatically update character statistics.",
+    function()
+        Lab.Enabled = not Lab.Enabled
+
+        if Lab.Enabled then
+            MonitorButton = nil
+            Notify("Player Lab", "Monitoring enabled.")
+        else
+            Notify("Player Lab", "Monitoring paused.")
+        end
+    end
+)
+
+-- Refresh button
+local function RefreshTelemetry()
+    local character = Player.Character
+    local humanoid = character
+        and character:FindFirstChildOfClass("Humanoid")
+
+    local root = character
+        and character:FindFirstChild("HumanoidRootPart")
+
+    local camera = workspace.CurrentCamera
+
+    if not character or not humanoid or not root then
+        Stats.Health.Text = "Unavailable"
+        Stats.Position.Text = "--"
+        Stats.Speed.Text = "--"
+        Stats.Jump.Text = "--"
+        Stats.State.Text = "No character"
+        CharacterInfo.Text = "Waiting for character..."
+        StatusDot.BackgroundColor3 =
+            Color3.fromRGB(255, 105, 115)
+        return
+    end
+
+    local hp = humanoid.Health
+    local maxHp = humanoid.MaxHealth
+    local position = root.Position
+
+    Stats.Health.Text = string.format(
+        "%.0f / %.0f HP", hp, maxHp
+    )
+
+    Stats.Position.Text = string.format(
+        "%.1f, %.1f, %.1f",
+        position.X,
+        position.Y,
+        position.Z
+    )
+
+    Stats.Speed.Text = string.format(
+        "%.1f", humanoid.WalkSpeed
+    )
+
+    Stats.Jump.Text = string.format(
+        "%.1f", humanoid.JumpPower
+    )
+
+    Stats.State.Text = tostring(
+        humanoid:GetState()
+    ):gsub("Enum.HumanoidStateType.", "")
+
+    Stats.Camera.Text = camera
+        and string.format("%.1f", camera.FieldOfView)
+        or "Unavailable"
+
+    local ratio = 0
+
+    if maxHp > 0 then
+        ratio = math.clamp(hp / maxHp, 0, 1)
+    end
+
+    HealthFill.Size = UDim2.new(ratio, 0, 1, 0)
+
+    if ratio > 0.5 then
+        HealthFill.BackgroundColor3 =
+            Color3.fromRGB(100, 225, 150)
+    elseif ratio > 0.25 then
+        HealthFill.BackgroundColor3 =
+            Color3.fromRGB(255, 190, 90)
+    else
+        HealthFill.BackgroundColor3 =
+            Color3.fromRGB(255, 95, 105)
+    end
+
+    StatusDot.BackgroundColor3 =
+        Color3.fromRGB(100, 225, 150)
+
+    CharacterInfo.Text =
+        "Name: " .. Player.Name ..
+        "\nDisplay: " .. Player.DisplayName ..
+        "\nCharacter: " .. character.Name
+end
+
+-- Manual refresh
+local RefreshButton = AddButton(
+    PlayerLab,
+    "Refresh Statistics",
+    "Immediately refresh all telemetry values.",
+    function()
+        RefreshTelemetry()
+        Notify("Player Lab", "Statistics refreshed.")
+    end
+)
+
+-- Monitoring loop
+Lab.Connection = RunService.Heartbeat:Connect(function(dt)
+    if not Lab.Enabled then
+        return
+    end
+
+    Lab.LastUpdate = Lab.LastUpdate + dt
+
+    if Lab.LastUpdate >= Lab.RefreshRate then
+        Lab.LastUpdate = 0
+
+        local success, err = pcall(RefreshTelemetry)
+
+        if not success then
+            warn("[Ultimate X] Telemetry error:", err)
+        end
+    end
+end)
+
+-- Respawn detection
+Player.CharacterAdded:Connect(function(character)
+    StatusDot.BackgroundColor3 =
+        Color3.fromRGB(255, 190, 90)
+
+    CharacterInfo.Text = "Character respawning..."
+
+    task.wait(1)
+
+    pcall(RefreshTelemetry)
+
+    Notify("Player Lab", "New character detected.")
+end)
+
+-- Initial values
+pcall(RefreshTelemetry)
+
+print("[Ultimate X] Player Lab initialized.")
