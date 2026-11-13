@@ -1,0 +1,624 @@
+--// АВТО-КЛИКЕР v1.0 — LocalScript
+--// Поместить в StarterPlayerScripts
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local VirtualUser = game:GetService("VirtualUser")
+local CoreGui = game:GetService("CoreGui")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+--// Настройки внешнего вида
+local COLORS = {
+    bg = Color3.fromRGB(28, 28, 34),
+    bg2 = Color3.fromRGB(38, 38, 46),
+    accent = Color3.fromRGB(90, 140, 255),
+    danger = Color3.fromRGB(230, 70, 70),
+    ok = Color3.fromRGB(70, 200, 120),
+    text = Color3.fromRGB(230, 230, 240),
+    sub = Color3.fromRGB(150, 150, 165),
+}
+
+--// Защита от дублирования
+if playerGui:FindFirstChild("AutoClickerGUI") then
+    playerGui.AutoClickerGUI:Destroy()
+end
+
+--// ============================================================
+--// ГЛАВНЫЙ КОНТЕЙНЕР
+--// ============================================================
+local mainGui = Instance.new("ScreenGui")
+mainGui.Name = "AutoClickerGUI"
+mainGui.ResetOnSpawn = false
+mainGui.IgnoreGuiInset = true
+mainGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+mainGui.Parent = playerGui
+
+--// ============================================================
+--// УТИЛИТЫ
+--// ============================================================
+local function new(class, props, parent)
+    local o = Instance.new(class)
+    for k, v in pairs(props or {}) do
+        o[k] = v
+    end
+    if parent then o.Parent = parent end
+    return o
+end
+
+local function corner(parent, r)
+    return new("UICorner", { CornerRadius = UDim.new(0, r or 8) }, parent)
+end
+
+local function stroke(parent, color, thickness)
+    return new("UIStroke", {
+        Color = color or COLORS.bg2,
+        Thickness = thickness or 1,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    }, parent)
+end
+
+local function makeDraggable(frame, handle, onDrag)
+    handle = handle or frame
+    local dragging, dragStart, startPos
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    handle.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+            if onDrag then onDrag() end
+        end
+    end)
+end
+
+--// Единицы времени -> мс
+local UNITS = {
+    { name = "мс",  mult = 1 },
+    { name = "сек", mult = 1000 },
+    { name = "мин", mult = 60000 },
+    { name = "час", mult = 3600000 },
+    { name = "день",mult = 86400000 },
+}
+
+local function formatInterval(ms)
+    if ms < 1000 then return string.format("%d мс", ms) end
+    if ms < 60000 then return string.format("%.1f сек", ms/1000) end
+    if ms < 3600000 then return string.format("%.1f мин", ms/60000) end
+    return string.format("%.1f ч", ms/3600000)
+end
+
+--// ============================================================
+--// ПРЕДУПРЕЖДЕНИЕ (модальное окно)
+--// ============================================================
+local function showWarning(title, text, opts)
+    opts = opts or {}
+    local yesText = opts.yesText or "Да"
+    local noText  = opts.noText  or "Нет"
+    local onYes   = opts.onYes
+    local onNo    = opts.onNo
+
+    local modal = new("TextButton", {
+        Name = "WarningOverlay",
+        Size = UDim2.fromScale(1, 1),
+        BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 0.5,
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 500,
+    }, mainGui)
+
+    local box = new("Frame", {
+        Size = UDim2.fromOffset(360, 170),
+        Position = UDim2.fromScale(0.5, 0.5),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundColor3 = COLORS.bg,
+        BorderSizePixel = 0,
+        ZIndex = 501,
+    }, modal)
+    corner(box, 10)
+    stroke(box, COLORS.accent, 1)
+
+    new("TextLabel", {
+        Size = UDim2.new(1, -30, 0, 30),
+        Position = UDim2.fromOffset(15, 12),
+        BackgroundTransparency = 1,
+        Text = title,
+        TextColor3 = COLORS.text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 16,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 502,
+    }, box)
+
+    new("TextLabel", {
+        Size = UDim2.new(1, -30, 0, 70),
+        Position = UDim2.fromOffset(15, 46),
+        BackgroundTransparency = 1,
+        Text = text,
+        TextColor3 = COLORS.sub,
+        Font = Enum.Font.Gotham,
+        TextSize = 13,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        ZIndex = 502,
+    }, box)
+
+    local function btn(text, color, xPos, callback)
+        local b = new("TextButton", {
+            Size = UDim2.fromOffset(150, 34),
+            Position = UDim2.fromOffset(xPos, 120),
+            BackgroundColor3 = color,
+            Text = text,
+            TextColor3 = COLORS.text,
+            Font = Enum.Font.GothamBold,
+            TextSize = 13,
+            BorderSizePixel = 0,
+            ZIndex = 502,
+        }, box)
+        corner(b, 6)
+        b.MouseButton1Click:Connect(function()
+            modal:Destroy()
+            if callback then callback() end
+        end)
+        return b
+    end
+
+    btn(noText, COLORS.bg2, 20, onNo)
+    btn(yesText, COLORS.danger, 190, onYes)
+end
+
+--// ============================================================
+--// СОСТОЯНИЕ СКРИПТА
+--// ============================================================
+local State = {
+    running = true,
+    mode = "separate", -- "separate" | "together"
+    points = {},       -- {id, name, x, y, intervalMs, color, paused, queueOrder, button}
+    nextId = 1,
+    clickCount = 0,
+}
+
+--// ============================================================
+--// ИКОНКА СКРИПТА (когда интерфейс свёрнут)
+--// ============================================================
+local icon = new("TextButton", {
+    Name = "ScriptIcon",
+    Size = UDim2.fromOffset(46, 46),
+    Position = UDim2.fromOffset(20, 20),
+    BackgroundColor3 = COLORS.bg,
+    Text = "⚡",
+    TextColor3 = COLORS.accent,
+    TextSize = 24,
+    Font = Enum.Font.GothamBold,
+    BorderSizePixel = 0,
+    Visible = false,
+    ZIndex = 100,
+}, mainGui)
+corner(icon, 23)
+stroke(icon, COLORS.accent, 2)
+
+--// ============================================================
+--// ГЛАВНОЕ ОКНО
+--// ============================================================
+local main = new("Frame", {
+    Name = "MainWindow",
+    Size = UDim2.fromOffset(360, 460),
+    Position = UDim2.fromOffset(60, 60),
+    BackgroundColor3 = COLORS.bg,
+    BorderSizePixel = 0,
+    ClipsDescendants = true,
+}, mainGui)
+corner(main, 12)
+stroke(main, COLORS.bg2, 1)
+
+-- Заголовок
+local titleBar = new("Frame", {
+    Name = "TitleBar",
+    Size = UDim2.new(1, 0, 0, 36),
+    BackgroundColor3 = COLORS.bg2,
+    BorderSizePixel = 0,
+}, main)
+corner(titleBar, 12)
+
+new("TextLabel", {
+    Size = UDim2.new(1, -80, 1, 0),
+    Position = UDim2.fromOffset(14, 0),
+    BackgroundTransparency = 1,
+    Text = "АВТО-КЛИКЕР",
+    TextColor3 = COLORS.text,
+    Font = Enum.Font.GothamBold,
+    TextSize = 14,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, titleBar)
+
+-- Кнопки × и –
+local function titleBtn(text, xOffset, color, cb)
+    local b = new("TextButton", {
+        Size = UDim2.fromOffset(26, 26),
+        Position = UDim2.new(1, xOffset, 0, 5),
+        BackgroundColor3 = color,
+        Text = text,
+        TextColor3 = COLORS.text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 16,
+        BorderSizePixel = 0,
+    }, titleBar)
+    corner(b, 6)
+    b.MouseButton1Click:Connect(cb)
+    return b
+end
+
+titleBtn("–", -34, COLORS.bg2, function()
+    -- Свернуть: показываем иконку
+    main.Visible = false
+    icon.Visible = true
+end)
+
+titleBtn("×", -64, COLORS.danger, function()
+    showWarning("Закрыть интерфейс полностью?",
+        "Нажмите «Да» чтобы ПОЛНОСТЬЮ удалить скрипт и остановить кликер.\n«Нет» — просто отмена.",
+        {
+            yesText = "Да, закрыть всё",
+            noText  = "Нет, отмена",
+            onYes = function()
+                State.running = false
+                mainGui:Destroy()
+            end,
+        })
+end)
+
+-- Перетаскивание
+makeDraggable(main, titleBar)
+
+-- Ресайз (правый нижний угол)
+local resizer = new("TextButton", {
+    Size = UDim2.fromOffset(16, 16),
+    Position = UDim2.new(1, -16, 1, -16),
+    BackgroundTransparency = 1,
+    Text = "",
+}, main)
+local rDrag = false
+local rStart, rStartSize
+resizer.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        rDrag = true
+        rStart = i.Position
+        rStartSize = main.Size
+    end
+end)
+UserInputService.InputChanged:Connect(function(i)
+    if rDrag and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+        local d = i.Position - rStart
+        main.Size = UDim2.fromOffset(
+            math.max(280, rStartSize.X.Offset + d.X),
+            math.max(300, rStartSize.Y.Offset + d.Y)
+        )
+    end
+end)
+UserInputService.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        rDrag = false
+    end
+end)
+
+-- ============================================================
+-- КНОПКА «ДОБАВИТЬ ТОЧКУ»
+-- ============================================================
+local addBtn = new("TextButton", {
+    Size = UDim2.new(1, -20, 0, 34),
+    Position = UDim2.fromOffset(10, 46),
+    BackgroundColor3 = COLORS.accent,
+    Text = "+  Добавить точку",
+    TextColor3 = COLORS.text,
+    Font = Enum.Font.GothamBold,
+    TextSize = 13,
+    BorderSizePixel = 0,
+}, main)
+corner(addBtn, 8)
+
+-- ============================================================
+-- СПИСОК ТОЧЕК (прокручиваемый)
+-- ============================================================
+local scroll = new("ScrollingFrame", {
+    Size = UDim2.new(1, -20, 1, -160),
+    Position = UDim2.fromOffset(10, 90),
+    BackgroundTransparency = 1,
+    CanvasSize = UDim2.new(0, 0, 0, 0),
+    ScrollBarThickness = 4,
+    ScrollBarImageColor3 = COLORS.accent,
+    BorderSizePixel = 0,
+}, main)
+
+new("UIListLayout", {
+    Padding = UDim.new(0, 6),
+    SortOrder = Enum.SortOrder.LayoutOrder,
+}, scroll)
+
+-- ============================================================
+-- РЕЖИМ РАБОТЫ (внизу)
+-- ============================================================
+local modeFrame = new("Frame", {
+    Size = UDim2.new(1, -20, 0, 58),
+    Position = UDim2.new(0, 10, 1, -68),
+    BackgroundColor3 = COLORS.bg2,
+    BorderSizePixel = 0,
+}, main)
+corner(modeFrame, 8)
+
+new("TextLabel", {
+    Size = UDim2.new(1, -10, 0, 20),
+    Position = UDim2.fromOffset(8, 2),
+    BackgroundTransparency = 1,
+    Text = "Режим работы:",
+    TextColor3 = COLORS.sub,
+    Font = Enum.Font.Gotham,
+    TextSize = 12,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, modeFrame)
+
+local function modeBtn(text, xPos, mode)
+    local b = new("TextButton", {
+        Size = UDim2.new(0.5, -14, 0, 26),
+        Position = UDim2.new(0, xPos, 1, -30),
+        BackgroundColor3 = mode == State.mode and COLORS.accent or COLORS.bg,
+        Text = text,
+        TextColor3 = COLORS.text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        BorderSizePixel = 0,
+    }, modeFrame)
+    corner(b, 6)
+    b.Name = "mode_" .. mode
+    return b
+end
+
+local btnSeparate = modeBtn("Отдельно", 8, "separate")
+local btnTogether = modeBtn("Вместе", 8 + (360-34)/2, "together") -- грубая корректировка; пересчитаем ниже
+
+-- Пересчёт позиций кнопок режима (правильно)
+btnSeparate.Size = UDim2.new(0.5, -12, 0, 26)
+btnSeparate.Position = UDim2.new(0, 8, 1, -30)
+btnTogether.Size = UDim2.new(0.5, -12, 0, 26)
+btnTogether.Position = UDim2.new(0.5, 4, 1, -30)
+
+local function setMode(m)
+    State.mode = m
+    btnSeparate.BackgroundColor3 = (m == "separate") and COLORS.accent or COLORS.bg
+    btnTogether.BackgroundColor3 = (m == "together") and COLORS.accent or COLORS.bg
+end
+btnSeparate.MouseButton1Click:Connect(function() setMode("separate") end)
+btnTogether.MouseButton1Click:Connect(function() setMode("together") end)
+
+-- ============================================================
+-- UI НАСТРОЙКИ ТОЧКИ (выезжающая панель)
+-- ============================================================
+local function openPointSettings(point)
+    -- Удаляем старую панель, если есть
+    if main:FindFirstChild("PointSettings") then
+        main.PointSettings:Destroy()
+    end
+
+    local panel = new("Frame", {
+        Name = "PointSettings",
+        Size = UDim2.fromScale(1, 1),
+        Position = UDim2.fromScale(0, 1),
+        BackgroundColor3 = COLORS.bg,
+        BorderSizePixel = 0,
+        ZIndex = 200,
+    }, main)
+    corner(panel, 12)
+    stroke(panel, COLORS.accent, 1)
+
+    -- Плавное появление
+    TweenService:Create(panel, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {
+        Position = UDim2.fromScale(0, 0)
+    }):Play()
+
+    local function closePanel()
+        local t = TweenService:Create(panel, TweenInfo.new(0.2), { Position = UDim2.fromScale(0, 1) })
+        t:Play()
+        t.Completed:Connect(function() panel:Destroy() end)
+    end
+
+    -- Шапка
+    local head = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 34),
+        BackgroundColor3 = COLORS.bg2,
+        BorderSizePixel = 0,
+        ZIndex = 201,
+    }, panel)
+    corner(head, 12)
+
+    new("TextLabel", {
+        Size = UDim2.new(1, -50, 1, 0),
+        Position = UDim2.fromOffset(12, 0),
+        BackgroundTransparency = 1,
+        Text = "Настройки точки",
+        TextColor3 = COLORS.text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 202,
+    }, head)
+
+    local backBtn = new("TextButton", {
+        Size = UDim2.fromOffset(26, 26),
+        Position = UDim2.new(1, -32, 0, 4),
+        BackgroundColor3 = COLORS.danger,
+        Text = "×",
+        TextColor3 = COLORS.text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 16,
+        BorderSizePixel = 0,
+        ZIndex = 202,
+    }, head)
+    corner(backBtn, 6)
+    backBtn.MouseButton1Click:Connect(closePanel)
+
+    -- Имя точки
+    local nameLabel = new("TextLabel", {
+        Size = UDim2.new(1, -20, 0, 16),
+        Position = UDim2.fromOffset(10, 42),
+        BackgroundTransparency = 1,
+        Text = "Название точки:",
+        TextColor3 = COLORS.sub,
+        Font = Enum.Font.Gotham,
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 202,
+    }, panel)
+
+    local nameBox = new("TextBox", {
+        Size = UDim2.new(1, -20, 0, 28),
+        Position = UDim2.fromOffset(10, 60),
+        BackgroundColor3 = COLORS.bg2,
+        Text = point.name,
+        TextColor3 = COLORS.text,
+        Font = Enum.Font.Gotham,
+        TextSize = 12,
+        PlaceholderText = "Имя...",
+        PlaceholderColor3 = COLORS.sub,
+        ClearTextOnFocus = false,
+        BorderSizePixel = 0,
+        ZIndex = 202,
+    }, panel)
+    corner(nameBox, 6)
+    nameBox.FocusLost:Connect(function()
+        point.name = nameBox.Text ~= "" and nameBox.Text or ("Точка " .. point.id)
+        if point.label then point.label.Text = point.name end
+    end)
+
+    -- Интервал
+    new("TextLabel", {
+        Size = UDim2.new(1, -20, 0, 16),
+        Position = UDim2.fromOffset(10, 96),
+        BackgroundTransparency = 1,
+        Text = "Частота нажатий (интервал):",
+        TextColor3 = COLORS.sub,
+        Font = Enum.Font.Gotham,
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 202,
+    }, panel)
+
+    local inputFrame = new("Frame", {
+        Size = UDim2.new(1, -20, 0, 32),
+        Position = UDim2.fromOffset(10, 114),
+        BackgroundColor3 = COLORS.bg2,
+        BorderSizePixel = 0,
+        ZIndex = 202,
+    }, panel)
+    corner(inputFrame, 6)
+
+    local valueBox = new("TextBox", {
+        Size = UDim2.new(0, 70, 1, -8),
+        Position = UDim2.fromOffset(4, 4),
+        BackgroundColor3 = COLORS.bg,
+        Text = tostring(point.intervalValue or 100),
+        TextColor3 = COLORS.text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 13,
+        ClearTextOnFocus = false,
+        BorderSizePixel = 0,
+        ZIndex = 203,
+    }, inputFrame)
+    corner(valueBox, 4)
+
+    local unitBtn = new("TextButton", {
+        Size = UDim2.new(0, 80, 1, -8),
+        Position = UDim2.new(1, -200, 0, 4),
+        BackgroundColor3 = COLORS.accent,
+        Text = point.unitName or "мс",
+        TextColor3 = COLORS.text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        BorderSizePixel = 0,
+        ZIndex = 203,
+    }, inputFrame)
+    corner(unitBtn, 4)
+
+    local unitIdx = 1
+    for i, u in ipairs(UNITS) do
+        if u.name == (point.unitName or "мс") then unitIdx = i break end
+    end
+    unitBtn.MouseButton1Click:Connect(function()
+        unitIdx = unitIdx % #UNITS + 1
+        unitBtn.Text = UNITS[unitIdx].name
+    end)
+
+    -- Галочка-триггер (включение/выключение точки)
+    local checkBtn = new("TextButton", {
+        Size = UDim2.fromOffset(38, 24),
+        Position = UDim2.new(1, -100, 0, 4),
+        BackgroundColor3 = point.paused and COLORS.bg or COLORS.ok,
+        Text = point.paused and "OFF" or "ON",
+        TextColor3 = COLORS.text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        BorderSizePixel = 0,
+        ZIndex = 203,
+    }, inputFrame)
+    corner(checkBtn, 4)
+    checkBtn.MouseButton1Click:Connect(function()
+        point.paused = not point.paused
+        checkBtn.BackgroundColor3 = point.paused and COLORS.bg or COLORS.ok
+        checkBtn.Text = point.paused and "OFF" or "ON"
+        if point.row then
+            point.row.BackgroundColor3 = point.paused and COLORS.bg2 or COLORS.bg
+        end
+    end)
+
+    -- Применение
+    local applyBtn = new("TextButton", {
+        Size = UDim2.new(1, -20, 0, 30),
+        Position = UDim2.fromOffset(10, 152),
+        BackgroundColor3 = COLORS.accent,
+        Text = "Применить",
+        TextColor3 = COLORS.text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 13,
+        BorderSizePixel = 0,
+        ZIndex = 202,
+    }, panel)
+    corner(applyBtn, 6)
+
+    applyBtn.MouseButton1Click:Connect(function()
+        local num = tonumber(valueBox.Text)
+        if not num or num <= 0 then
+            showWarning("Ошибка", "Введите положительное число!", { yesText = "Ок", noText = "Отмена" })
+            return
+        end
+        local ms = num * UNITS[unitIdx].mult
+        if ms < 50 then
+            showWarning("Очень высокая частота!",
+                string.format("Интервал %s — это менее 50 мс, может вызвать сильные лаги и кик.\nПродолжить?", formatInterval(ms)),
+                {
+                    yesText = "Всё равно",
+                    noText = "Отмена",
+                    onYes = function()
+                        point.intervalMs = ms
+                        point.intervalValue = num
+                        point.unitName = UNITS[unitIdx].name
+                        if point.label then
+                            point.label.Text = point.name .. " (" .. formatInterval(ms) .. ")"
+                        end
+                        closePanel()
+  
