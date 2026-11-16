@@ -1,0 +1,1494 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local player = Players.LocalPlayer
+local mouse = player:GetMouse()
+
+local CONFIGS_FILENAME = "TeleportHub_AllConfigs.json"
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "TeleportHubPersistent"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+-- ==================== УТИЛИТЫ ====================
+local function makeDraggable(frame)
+    local dragging, dragStart, startPos
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+
+-- Перевод Color3 <-> HEX (формат "G08L" не является стандартом, используем HEX + RGB)
+local function colorToHex(c)
+    return string.format("%02X%02X%02X", math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
+end
+local function hexToColor(hex)
+    hex = hex:gsub("#", "")
+    if #hex == 6 then
+        local r = tonumber(hex:sub(1,2), 16)
+        local g = tonumber(hex:sub(3,4), 16)
+        local b = tonumber(hex:sub(5,6), 16)
+        if r and g and b then return Color3.fromRGB(r, g, b) end
+    end
+    return nil
+end
+local function colorToRgbString(c)
+    return string.format("%d,%d,%d", math.floor(c.R*255+0.5), math.floor(c.G*255+0.5), math.floor(c.B*255+0.5))
+end
+local function rgbStringToColor(str)
+    local r,g,b = str:match("(%d+)%s*,%s*(%d+)%s*,%s*(%d+)")
+    if r and g and b then
+        r,g,b = tonumber(r),tonumber(g),tonumber(b)
+        if r<=255 and g<=255 and b<=255 then return Color3.fromRGB(r,g,b) end
+    end
+    return nil
+end
+
+local function getRoot()
+    local char = player.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+-- ==================== ПАЛИТРА ЦВЕТОВ ====================
+local PRESET_COLORS = {
+    {name="Белый",   c=Color3.fromRGB(255,255,255)},
+    {name="Чёрный",  c=Color3.fromRGB(20,20,20)},
+    {name="Серый",   c=Color3.fromRGB(128,128,128)},
+    {name="Красный", c=Color3.fromRGB(230,50,50)},
+    {name="Оранж.",  c=Color3.fromRGB(255,150,40)},
+    {name="Жёлтый",  c=Color3.fromRGB(245,220,60)},
+    {name="Зелёный", c=Color3.fromRGB(60,190,90)},
+    {name="Бирюз.",  c=Color3.fromRGB(60,200,200)},
+    {name="Синий",   c=Color3.fromRGB(60,120,230)},
+    {name="Фиолет.", c=Color3.fromRGB(150,80,220)},
+    {name="Розовый", c=Color3.fromRGB(240,120,200)},
+    {name="Коричн.", c=Color3.fromRGB(140,90,60)},
+}
+
+-- ==================== ИКОНКА ОТКРЫТИЯ ====================
+local openBtn = Instance.new("ImageButton")
+openBtn.Size = UDim2.new(0, 50, 0, 50)
+openBtn.Position = UDim2.new(0.05, 0, 0.4, 0)
+openBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+openBtn.Visible = false
+openBtn.Parent = gui
+Instance.new("UICorner", openBtn).CornerRadius = UDim.new(1, 0)
+makeDraggable(openBtn)
+
+local openLbl = Instance.new("TextLabel", openBtn)
+openLbl.Size = UDim2.new(1, 0, 1, 0)
+openLbl.BackgroundTransparency = 1
+openLbl.Text = "⚡"
+openLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+openLbl.TextSize = 22
+
+-- ==================== ГЛАВНОЕ ОКНО ====================
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 420, 0, 460)
+main.Position = UDim2.new(0.5, -210, 0.5, -230)
+main.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+makeDraggable(main)
+
+local top = Instance.new("Frame", main)
+top.Size = UDim2.new(1, 0, 0, 35)
+top.BackgroundTransparency = 1
+
+local title = Instance.new("TextLabel", top)
+title.Size = UDim2.new(0.8, 0, 1, 0)
+title.Position = UDim2.new(0.03, 0, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = "⚡ Teleport Hub Pro v2"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 14
+title.Font = Enum.Font.GothamBold
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+local close = Instance.new("TextButton", top)
+close.Size = UDim2.new(0, 28, 0, 28)
+close.Position = UDim2.new(1, -33, 0.5, -14)
+close.BackgroundColor3 = Color3.fromRGB(50, 30, 30)
+close.Text = "×"
+close.TextColor3 = Color3.fromRGB(255, 100, 100)
+close.TextSize = 18
+Instance.new("UICorner", close).CornerRadius = UDim.new(0, 6)
+
+close.MouseButton1Click:Connect(function()
+    main.Visible = false
+    openBtn.Visible = true
+end)
+openBtn.MouseButton1Click:Connect(function()
+    main.Visible = true
+    openBtn.Visible = false
+end)
+
+-- ==================== ВКЛАДКИ ====================
+local tabsFrame = Instance.new("Frame", main)
+tabsFrame.Size = UDim2.new(1, -16, 0, 30)
+tabsFrame.Position = UDim2.new(0, 8, 0, 40)
+tabsFrame.BackgroundTransparency = 1
+
+local pages = {}
+local function makeTab(index, total, name)
+    local btn = Instance.new("TextButton", tabsFrame)
+    local w = 1 / total
+    btn.Size = UDim2.new(w - 0.01, 0, 1, 0)
+    btn.Position = UDim2.new((index - 1) * w, 0, 0, 0)
+    btn.BackgroundColor3 = (index == 1) and Color3.fromRGB(45, 45, 60) or Color3.fromRGB(25, 25, 33)
+    btn.Text = name
+    btn.TextColor3 = Color3.fromRGB(230, 230, 230)
+    btn.TextSize = 10
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    
+    local page = Instance.new("ScrollingFrame", main)
+    page.Size = UDim2.new(1, -16, 1, -85)
+    page.Position = UDim2.new(0, 8, 0, 78)
+    page.BackgroundTransparency = 1
+    page.CanvasSize = UDim2.new(0, 0, 0, 0)
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.ScrollBarThickness = 3
+    page.Visible = (index == 1)
+    
+    local layout = Instance.new("UIListLayout", page)
+    layout.Padding = UDim.new(0, 6)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    
+    btn.MouseButton1Click:Connect(function()
+        for i, p in ipairs(pages) do
+            p.page.Visible = (i == index)
+            p.btn.BackgroundColor3 = (i == index) and Color3.fromRGB(45, 45, 60) or Color3.fromRGB(25, 25, 33)
+        end
+    end)
+    
+    table.insert(pages, {btn = btn, page = page})
+    return page
+end
+
+local TOTAL_TABS = 6
+local t1 = makeTab(1, TOTAL_TABS, "Точки")
+local t2 = makeTab(2, TOTAL_TABS, "Игроки")
+local t3 = makeTab(3, TOTAL_TABS, "Конфиги")
+local t4 = makeTab(4, TOTAL_TABS, "Портал")
+local t5 = makeTab(5, TOTAL_TABS, "FreeCam")
+local t6 = makeTab(6, TOTAL_TABS, "Другое")
+
+-- Общие данные
+local clickTpActive = false
+local savedPointsData = {}   -- {Name, Pos={12}, ColorBg, ColorTxt, History={...}}
+local savedConfigsList = {}
+local portalsData = {}       -- {Name, Pos={12}, ColorBg, ColorTxt, LinkedTo=name}
+
+local createPointUI
+-- ==================== ПИКЕР ЦВЕТА ====================
+-- Возвращает Frame (виджет). onChanged(Color3) вызывается при выборе.
+local function createColorPicker(parent, initialColor, onChanged)
+    local holder = Instance.new("Frame", parent)
+    holder.Size = UDim2.new(1, 0, 0, 32)
+    holder.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+    Instance.new("UICorner", holder).CornerRadius = UDim.new(0, 6)
+    
+    local preview = Instance.new("Frame", holder)
+    preview.Size = UDim2.new(0, 24, 0, 24)
+    preview.Position = UDim2.new(0, 4, 0.5, -12)
+    preview.BackgroundColor3 = initialColor
+    Instance.new("UICorner", preview).CornerRadius = UDim.new(0, 4)
+    
+    local btn = Instance.new("TextButton", holder)
+    btn.Size = UDim2.new(1, -36, 1, 0)
+    btn.Position = UDim2.new(0, 32, 0, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = "Изменить цвет"
+    btn.TextColor3 = Color3.fromRGB(230, 230, 230)
+    btn.TextSize = 11
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local popup = Instance.new("Frame", main)
+    popup.Size = UDim2.new(0, 300, 0, 300)
+    popup.Position = UDim2.new(0.5, -150, 0.5, -150)
+    popup.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    popup.Visible = false
+    popup.ZIndex = 10
+    Instance.new("UICorner", popup).CornerRadius = UDim.new(0, 10)
+    Instance.new("UIStroke", popup).Color = Color3.fromRGB(80, 80, 110)
+    makeDraggable(popup)
+    
+    local pTitle = Instance.new("TextLabel", popup)
+    pTitle.Size = UDim2.new(1, -40, 0, 28)
+    pTitle.Position = UDim2.new(0, 10, 0, 5)
+    pTitle.BackgroundTransparency = 1
+    pTitle.Text = "Выбор цвета"
+    pTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    pTitle.TextSize = 12
+    pTitle.Font = Enum.Font.GothamBold
+    pTitle.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local pClose = Instance.new("TextButton", popup)
+    pClose.Size = UDim2.new(0, 24, 0, 24)
+    pClose.Position = UDim2.new(1, -28, 0, 5)
+    pClose.BackgroundColor3 = Color3.fromRGB(60, 30, 30)
+    pClose.Text = "×"
+    pClose.TextColor3 = Color3.fromRGB(255, 120, 120)
+    pClose.TextSize = 14
+    Instance.new("UICorner", pClose).CornerRadius = UDim.new(0, 4)
+    pClose.MouseButton1Click:Connect(function() popup.Visible = false end)
+    
+    -- Палитра кнопок
+    local palette = Instance.new("Frame", popup)
+    palette.Size = UDim2.new(1, -20, 0, 100)
+    palette.Position = UDim2.new(0, 10, 0, 38)
+    palette.BackgroundTransparency = 1
+    local pgrid = Instance.new("UIGridLayout", palette)
+    pgrid.CellSize = UDim2.new(0, 44, 0, 22)
+    pgrid.CellPadding = UDim2.new(0, 4, 0, 4)
+    
+    local current = initialColor
+    local function apply(c)
+        current = c
+        preview.BackgroundColor3 = c
+        if onChanged then onChanged(c) end
+    end
+    
+    for _, entry in ipairs(PRESET_COLORS) do
+        local b = Instance.new("TextButton", palette)
+        b.BackgroundColor3 = entry.c
+        b.Text = ""
+        b.BorderSizePixel = 1
+        b.BorderColor3 = Color3.fromRGB(90,90,90)
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 3)
+        b.MouseEnter:Connect(function() b.BorderColor3 = Color3.fromRGB(255,255,255) end)
+        b.MouseLeave:Connect(function() b.BorderColor3 = Color3.fromRGB(90,90,90) end)
+        b.MouseButton1Click:Connect(function() apply(entry.c) end)
+    end
+    
+    -- Круговой селектор (Hue slider через драг)
+    local ringHolder = Instance.new("Frame", popup)
+    ringHolder.Size = UDim2.new(0, 90, 0, 90)
+    ringHolder.Position = UDim2.new(0, 10, 0, 145)
+    ringHolder.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+    ringHolder.ClipsDescendants = true
+    Instance.new("UICorner", ringHolder).CornerRadius = UDim.new(1, 0)
+    
+    local ringDot = Instance.new("Frame", ringHolder)
+    ringDot.Size = UDim2.new(0, 14, 0, 14)
+    ringDot.BackgroundColor3 = current
+    ringDot.AnchorPoint = Vector2.new(0.5, 0.5)
+    ringDot.Position = UDim2.new(0.5, 0, 0.5, 0)
+    Instance.new("UICorner", ringDot).CornerRadius = UDim.new(1, 0)
+    
+    local ringActive = false
+    local function updateRingFromPos(mx, my)
+        local abs = ringHolder.AbsolutePosition
+        local sz = ringHolder.AbsoluteSize
+        local cx, cy = abs.X + sz.X/2, abs.Y + sz.Y/2
+        local dx, dy = mx - cx, my - cy
+        local angle = math.atan2(dy, dx)
+        local radius = sz.X/2 - 8
+        local px = math.cos(angle) * radius
+        local py = math.sin(angle) * radius
+        ringDot.Position = UDim2.new(0.5, px, 0.5, py)
+        local hue = (angle / (math.pi*2)) % 1
+        local c = Color3.fromHSV(hue, 1, 1)
+        apply(c)
+    end
+    ringHolder.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            ringActive = true
+            updateRingFromPos(i.Position.X, i.Position.Y)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if ringActive and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            updateRingFromPos(i.Position.X, i.Position.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            ringActive = false
+        end
+    end)
+    
+    -- HEX / RGB ввод
+    local hexBox = Instance.new("TextBox", popup)
+    hexBox.Size = UDim2.new(0, 130, 0, 26)
+    hexBox.Position = UDim2.new(0, 108, 0, 150)
+    hexBox.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+    hexBox.Text = colorToHex(current)
+    hexBox.PlaceholderText = "HEX (напр. FF8800)"
+    hexBox.TextColor3 = Color3.fromRGB(255,255,255)
+    hexBox.TextSize = 11
+    hexBox.ClearTextOnFocus = false
+    Instance.new("UICorner", hexBox).CornerRadius = UDim.new(0, 4)
+    hexBox.FocusLost:Connect(function()
+        local c = hexToColor(hexBox.Text)
+        if c then apply(c) else hexBox.Text = colorToHex(current) end
+    end)
+    
+    local rgbBox = Instance.new("TextBox", popup)
+    rgbBox.Size = UDim2.new(0, 130, 0, 26)
+    rgbBox.Position = UDim2.new(0, 108, 0, 182)
+    rgbBox.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+    rgbBox.Text = colorToRgbString(current)
+    rgbBox.PlaceholderText = "RGB (255,140,0)"
+    rgbBox.TextColor3 = Color3.fromRGB(255,255,255)
+    rgbBox.TextSize = 11
+    rgbBox.ClearTextOnFocus = false
+    Instance.new("UICorner", rgbBox).CornerRadius = UDim.new(0, 4)
+    rgbBox.FocusLost:Connect(function()
+        local c = rgbStringToColor(rgbBox.Text)
+        if c then apply(c) else rgbBox.Text = colorToRgbString(current) end
+    end)
+    
+    -- Синхронизация полей при изменении
+    local function syncFields()
+        hexBox.Text = colorToHex(current)
+        rgbBox.Text = colorToRgbString(current)
+        preview.BackgroundColor3 = current
+    end
+    -- Переопределяем apply, чтобы обновлять поля
+    local applyOld = apply
+    apply = function(c)
+        applyOld(c)
+        syncFields()
+    end
+    
+    local okBtn = Instance.new("TextButton", popup)
+    okBtn.Size = UDim2.new(1, -20, 0, 28)
+    okBtn.Position = UDim2.new(0, 10, 1, -36)
+    okBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 60)
+    okBtn.Text = "Применить"
+    okBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    okBtn.TextSize = 12
+    Instance.new("UICorner", okBtn).CornerRadius = UDim.new(0, 6)
+    okBtn.MouseButton1Click:Connect(function()
+        if onChanged then onChanged(current) end
+        popup.Visible = false
+    end)
+    
+    btn.MouseButton1Click:Connect(function()
+        popup.Visible = not popup.Visible
+        if popup.Visible then
+            hexBox.Text = colorToHex(current)
+            rgbBox.Text = colorToRgbString(current)
+        end
+    end)
+    
+    return holder
+end
+-- ==================== ВКЛАДКА 1: ТОЧКИ ====================
+local nameInput = Instance.new("TextBox", t1)
+nameInput.Size = UDim2.new(1, 0, 0, 32)
+nameInput.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+nameInput.Text = "Моя точка"
+nameInput.PlaceholderText = "Название точки"
+nameInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+nameInput.TextSize = 12
+nameInput.ClearTextOnFocus = false
+Instance.new("UICorner", nameInput).CornerRadius = UDim.new(0, 6)
+
+-- Цвета для новой точки (по умолчанию)
+local newPointBgColor = Color3.fromRGB(28, 28, 36)
+local newPointTxtColor = Color3.fromRGB(255, 255, 255)
+
+local lblBg = Instance.new("TextLabel", t1)
+lblBg.Size = UDim2.new(1, 0, 0, 16)
+lblBg.BackgroundTransparency = 1
+lblBg.Text = "Цвет фона карточки:"
+lblBg.TextColor3 = Color3.fromRGB(200, 200, 210)
+lblBg.TextSize = 10
+lblBg.TextXAlignment = Enum.TextXAlignment.Left
+
+createColorPicker(t1, newPointBgColor, function(c) newPointBgColor = c end)
+
+local lblTxt = Instance.new("TextLabel", t1)
+lblTxt.Size = UDim2.new(1, 0, 0, 16)
+lblTxt.BackgroundTransparency = 1
+lblTxt.Text = "Цвет текста названия:"
+lblTxt.TextColor3 = Color3.fromRGB(200, 200, 210)
+lblTxt.TextSize = 10
+lblTxt.TextXAlignment = Enum.TextXAlignment.Left
+
+createColorPicker(t1, newPointTxtColor, function(c) newPointTxtColor = c end)
+
+local addPointBtn = Instance.new("TextButton", t1)
+addPointBtn.Size = UDim2.new(1, 0, 0, 32)
+addPointBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 60)
+addPointBtn.Text = "💾 Сохранить точку"
+addPointBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+addPointBtn.TextSize = 12
+Instance.new("UICorner", addPointBtn).CornerRadius = UDim.new(0, 6)
+
+local divider1 = Instance.new("Frame", t1)
+divider1.Size = UDim2.new(1, 0, 0, 4)
+divider1.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+Instance.new("UICorner", divider1).CornerRadius = UDim.new(1, 0)
+
+local pointsContainer = Instance.new("Frame", t1)
+pointsContainer.Name = "PointsContainer"
+pointsContainer.Size = UDim2.new(1, 0, 0, 0)
+pointsContainer.BackgroundTransparency = 1
+pointsContainer.AutomaticSize = Enum.AutomaticSize.Y
+local pLayout = Instance.new("UIListLayout", pointsContainer)
+pLayout.Padding = UDim.new(0, 6)
+pLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+-- Вспомогательная функция: отрисовка списка точек
+local function refreshPointsUI()
+    for _, child in ipairs(pointsContainer:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+    for idx, pt in ipairs(savedPointsData) do
+        createPointUI(pt, idx)
+    end
+end
+
+createPointUI = function(pt, idx)
+    local item = Instance.new("Frame", pointsContainer)
+    item.Size = UDim2.new(1, 0, 0, 72)
+    item.BackgroundColor3 = pt.ColorBg or Color3.fromRGB(28, 28, 36)
+    Instance.new("UICorner", item).CornerRadius = UDim.new(0, 6)
+    
+    local lbl = Instance.new("TextLabel", item)
+    lbl.Size = UDim2.new(0.5, 0, 0, 18)
+    lbl.Position = UDim2.new(0.03, 0, 0, 3)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = pt.Name
+    lbl.TextColor3 = pt.ColorTxt or Color3.fromRGB(240, 240, 240)
+    lbl.TextSize = 12
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextTruncate = Enum.TextTruncate.AtEnd
+    
+    local posLbl = Instance.new("TextLabel", item)
+    posLbl.Size = UDim2.new(0.7, 0, 0, 16)
+    posLbl.Position = UDim2.new(0.03, 0, 0, 22)
+    posLbl.BackgroundTransparency = 1
+    posLbl.TextColor3 = Color3.fromRGB(180, 180, 195)
+    posLbl.TextSize = 10
+    posLbl.TextXAlignment = Enum.TextXAlignment.Left
+    local function fmtPos(p)
+        return string.format("X:%.0f Y:%.0f Z:%.0f", p.X, p.Y, p.Z)
+    end
+    posLbl.Text = fmtPos(pt.Pos)
+    
+    -- Кнопки
+    local tp = Instance.new("TextButton", item)
+    tp.Size = UDim2.new(0, 50, 0, 24)
+    tp.Position = UDim2.new(1, -170, 0, 4)
+    tp.BackgroundColor3 = Color3.fromRGB(40, 80, 130)
+    tp.Text = "ТП"
+    tp.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tp.TextSize = 11
+    Instance.new("UICorner", tp).CornerRadius = UDim.new(0, 4)
+    tp.MouseButton1Click:Connect(function()
+        local r = getRoot()
+        if r then r.CFrame = CFrame.new(unpack(pt.Pos)) end
+    end)
+    
+    -- Редактор координат
+    local edit = Instance.new("TextButton", item)
+    edit.Size = UDim2.new(0, 55, 0, 24)
+    edit.Position = UDim2.new(1, -118, 0, 4)
+    edit.BackgroundColor3 = Color3.fromRGB(70, 70, 110)
+    edit.Text = "Изм."
+    edit.TextColor3 = Color3.fromRGB(255, 255, 255)
+    edit.TextSize = 10
+    Instance.new("UICorner", edit).CornerRadius = UDim.new(0, 4)
+    
+    -- Кнопка отката (если есть история)
+    local hist = Instance.new("TextButton", item)
+    hist.Size = UDim2.new(0, 55, 0, 24)
+    hist.Position = UDim2.new(1, -118, 0, 34)
+    hist.BackgroundColor3 = Color3.fromRGB(90, 70, 40)
+    hist.Text = "Откат"
+    hist.TextColor3 = Color3.fromRGB(255, 255, 255)
+    hist.TextSize = 10
+    Instance.new("UICorner", hist).CornerRadius = UDim.new(0, 4)
+    hist.Visible = (pt.History and #pt.History > 0) and true or false
+    
+    local del = Instance.new("TextButton", item)
+    del.Size = UDim2.new(0, 50, 0, 24)
+    del.Position = UDim2.new(1, -60, 0, 4)
+    del.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
+    del.Text = "Удал."
+    del.TextColor3 = Color3.fromRGB(255, 255, 255)
+    del.TextSize = 10
+    Instance.new("UICorner", del).CornerRadius = UDim.new(0, 4)
+    del.MouseButton1Click:Connect(function()
+        table.remove(savedPointsData, idx)
+        refreshPointsUI()
+    end)
+    
+    -- Логика редактора координат с подтверждением
+    edit.MouseButton1Click:Connect(function()
+        -- Открываем мини-диалог
+        local dlg = Instance.new("Frame", main)
+        dlg.Size = UDim2.new(0, 260, 0, 220)
+        dlg.Position = UDim2.new(0.5, -130, 0.5, -110)
+        dlg.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+        dlg.ZIndex = 20
+        Instance.new("UICorner", dlg).CornerRadius = UDim.new(0, 10)
+        Instance.new("UIStroke", dlg).Color = Color3.fromRGB(90, 90, 120)
+        makeDraggable(dlg)
+        
+        local dTitle = Instance.new("TextLabel", dlg)
+        dTitle.Size = UDim2.new(1, -20, 0, 26)
+        dTitle.Position = UDim2.new(0, 10, 0, 5)
+        dTitle.BackgroundTransparency = 1
+        dTitle.Text = "Редактор координат: "..pt.Name
+        dTitle.TextColor3 = Color3.fromRGB(255,255,255)
+        dTitle.TextSize = 11
+        dTitle.Font = Enum.Font.GothamBold
+        dTitle.TextTruncate = Enum.TextTruncate.AtEnd
+        
+        local fields = {}
+        local labels = {"X", "Y", "Z"}
+        for i = 1, 3 do
+            local fl = Instance.new("TextLabel", dlg)
+            fl.Size = UDim2.new(0, 24, 0, 26)
+            fl.Position = UDim2.new(0, 10, 0, 34 + (i-1)*32)
+            fl.BackgroundTransparency = 1
+            fl.Text = labels[i]
+            fl.TextColor3 = Color3.fromRGB(220,220,220)
+            fl.TextSize = 12
+            
+            local tb = Instance.new("TextBox", dlg)
+            tb.Size = UDim2.new(1, -50, 0, 26)
+            tb.Position = UDim2.new(0, 40, 0, 34 + (i-1)*32)
+            tb.BackgroundColor3 = Color3.fromRGB(22,22,30)
+            tb.Text = tostring(pt.Pos[i])
+            tb.TextColor3 = Color3.fromRGB(255,255,255)
+            tb.TextSize = 12
+            tb.ClearTextOnFocus = false
+            Instance.new("UICorner", tb).CornerRadius = UDim.new(0, 4)
+            fields[i] = tb
+        end
+        
+        local okBtn = Instance.new("TextButton", dlg)
+        okBtn.Size = UDim2.new(0.5, -15, 0, 28)
+        okBtn.Position = UDim2.new(0, 10, 1, -36)
+        okBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 60)
+        okBtn.Text = "Применить"
+        okBtn.TextColor3 = Color3.fromRGB(255,255,255)
+        okBtn.TextSize = 11
+        Instance.new("UICorner", okBtn).CornerRadius = UDim.new(0, 5)
+        
+        local cancelBtn = Instance.new("TextButton", dlg)
+        cancelBtn.Size = UDim2.new(0.5, -15, 0, 28)
+        cancelBtn.Position = UDim2.new(0.5, 5, 1, -36)
+        cancelBtn.BackgroundColor3 = Color3.fromRGB(60, 40, 40)
+        cancelBtn.Text = "Отмена"
+        cancelBtn.TextColor3 = Color3.fromRGB(255,255,255)
+        cancelBtn.TextSize = 11
+        Instance.new("UICorner", cancelBtn).CornerRadius = UDim.new(0, 5)
+        cancelBtn.MouseButton1Click:Connect(function() dlg:Destroy() end)
+        
+        okBtn.MouseButton1Click:Connect(function()
+            local nx = tonumber(fields[1].Text)
+            local ny = tonumber(fields[2].Text)
+            local nz = tonumber(fields[3].Text)
+            if not (nx and ny and nz) then
+                okBtn.Text = "Не числа!"
+                task.delay(1, function() okBtn.Text = "Применить" end)
+                return
+            end
+            -- Диалог подтверждения
+            local conf = Instance.new("Frame", main)
+            conf.Size = UDim2.new(0, 240, 0, 130)
+            conf.Position = UDim2.new(0.5, -120, 0.5, -65)
+            conf.BackgroundColor3 = Color3.fromRGB(40, 25, 25)
+            conf.ZIndex = 30
+            Instance.new("UICorner", conf).CornerRadius = UDim.new(0, 10)
+            Instance.new("UIStroke", conf).Color = Color3.fromRGB(200, 100, 100)
+            
+            local cLbl = Instance.new("TextLabel", conf)
+            cLbl.Size = UDim2.new(1, -20, 0, 60)
+            cLbl.Position = UDim2.new(0, 10, 0, 10)
+            cLbl.BackgroundTransparency = 1
+            cLbl.Text = string.format("Изменить координаты?\n%.2f, %.2f, %.2f → %.2f, %.2f, %.2f", 
+                pt.Pos[1], pt.Pos[2], pt.Pos[3], nx, ny, nz)
+            cLbl.TextColor3 = Color3.fromRGB(255,255,255)
+            cLbl.TextSize = 11
+            cLbl.TextWrapped = true
+            
+            local yBtn = Instance.new("TextButton", conf)
+            yBtn.Size = UDim2.new(0.5, -15, 0, 28)
+            yBtn.Position = UDim2.new(0, 10, 1, -36)
+            yBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 60)
+            yBtn.Text = "Да"
+            yBtn.TextColor3 = Color3.fromRGB(255,255,255)
+            yBtn.TextSize = 11
+            Instance.new("UICorner", yBtn).CornerRadius = UDim.new(0, 5)
+            
+            local nBtn = Instance.new("TextButton", conf)
+            nBtn.Size = UDim2.new(0.5, -15, 0, 28)
+            nBtn.Position = UDim2.new(0.5, 5, 1, -36)
+            nBtn.BackgroundColor3 = Color3.fromRGB(60, 40, 40)
+            nBtn.Text = "Нет"
+            nBtn.TextColor3 = Color3.fromRGB(255,255,255)
+            nBtn.TextSize = 11
+            Instance.new("UICorner", nBtn).CornerRadius = UDim.new(0, 5)
+            nBtn.MouseButton1Click:Connect(function() conf:Destroy() end)
+            
+            yBtn.MouseButton1Click:Connect(function()
+                -- Сохраняем историю
+                pt.History = pt.History or {}
+                local oldCopy = {}
+                for i = 1, #pt.Pos do table.insert(oldCopy, pt.Pos[i]) end
+                table.insert(pt.History, oldCopy)
+                if #pt.History > 10 then table.remove(pt.History, 1) end
+                -- Новые значения
+                pt.Pos[1], pt.Pos[2], pt.Pos[3] = nx, ny, nz
+                conf:Destroy()
+                dlg:Destroy()
+                refreshPointsUI()
+            end)
+        end)
+    end)
+    
+    hist.MouseButton1Click:Connect(function()
+        if pt.History and #pt.History > 0 then
+            local old = table.remove(pt.History)
+            pt.Pos[1], pt.Pos[2], pt.Pos[3] = old[1], old[2], old[3]
+            refreshPointsUI()
+        end
+    end)
+end
+
+addPointBtn.MouseButton1Click:Connect(function()
+    local root = getRoot()
+    if not root then return end
+    local pos = root.CFrame
+    local pName = (nameInput.Text ~= "") and nameInput.Text or "Точка"
+    
+    table.insert(savedPointsData, {
+        Name = pName,
+        Pos = {pos.X, pos.Y, pos.Z},
+        ColorBg = newPointBgColor,
+        ColorTxt = newPointTxtColor,
+        History = {}
+    })
+    refreshPointsUI()
+end)
+-- ==================== ВКЛАДКА 2: ИГРОКИ ====================
+local playersContainer = Instance.new("Frame", t2)
+playersContainer.Size = UDim2.new(1, 0, 0, 0)
+playersContainer.BackgroundTransparency = 1
+local plLayout = Instance.new("UIListLayout", playersContainer)
+plLayout.Padding = UDim.new(0, 6)
+
+local function updatePlayers()
+    for _, c in ipairs(playersContainer:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player then
+            local card = Instance.new("Frame", playersContainer)
+            card.Size = UDim2.new(1, 0, 0, 40)
+            card.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+            Instance.new("UICorner", card).CornerRadius = UDim.new(0, 6)
+            
+            local nameLbl = Instance.new("TextLabel", card)
+            nameLbl.Size = UDim2.new(0.6, 0, 1, 0)
+            nameLbl.Position = UDim2.new(0.03, 0, 0, 0)
+            nameLbl.BackgroundTransparency = 1
+            nameLbl.Text = p.DisplayName .. " (@" .. p.Name .. ")"
+            nameLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+            nameLbl.TextSize = 11
+            nameLbl.Font = Enum.Font.GothamBold
+            nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+            nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+            
+            local tpBtn = Instance.new("TextButton", card)
+            tpBtn.Size = UDim2.new(0, 75, 0, 28)
+            tpBtn.Position = UDim2.new(1, -81, 0.5, -14)
+            tpBtn.BackgroundColor3 = Color3.fromRGB(40, 80, 130)
+            tpBtn.Text = "ТП к нему"
+            tpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            tpBtn.TextSize = 11
+            Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 4)
+            tpBtn.MouseButton1Click:Connect(function()
+                local r = getRoot()
+                local tChar = p.Character
+                if r and tChar and tChar:FindFirstChild("HumanoidRootPart") then
+                    r.CFrame = tChar.HumanoidRootPart.CFrame + Vector3.new(0, 3, 0)
+                end
+            end)
+        end
+    end
+end
+Players.PlayerAdded:Connect(updatePlayers)
+Players.PlayerRemoving:Connect(updatePlayers)
+task.spawn(updatePlayers)
+
+-- ==================== ВКЛАДКА 4: ПОРТАЛЫ ====================
+local portalNameInput = Instance.new("TextBox", t4)
+portalNameInput.Size = UDim2.new(1, 0, 0, 32)
+portalNameInput.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+portalNameInput.Text = "Портал"
+portalNameInput.PlaceholderText = "Название портала"
+portalNameInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+portalNameInput.TextSize = 12
+portalNameInput.ClearTextOnFocus = false
+Instance.new("UICorner", portalNameInput).CornerRadius = UDim.new(0, 6)
+
+local newPortalBg = Color3.fromRGB(60, 40, 120)
+local newPortalTxt = Color3.fromRGB(255, 255, 255)
+
+local pLblBg = Instance.new("TextLabel", t4)
+pLblBg.Size = UDim2.new(1, 0, 0, 16)
+pLblBg.BackgroundTransparency = 1
+pLblBg.Text = "Цвет фона портала:"
+pLblBg.TextColor3 = Color3.fromRGB(200, 200, 210)
+pLblBg.TextSize = 10
+pLblBg.TextXAlignment = Enum.TextXAlignment.Left
+
+createColorPicker(t4, newPortalBg, function(c) newPortalBg = c end)
+
+local pLblTxt = Instance.new("TextLabel", t4)
+pLblTxt.Size = UDim2.new(1, 0, 0, 16)
+pLblTxt.BackgroundTransparency = 1
+pLblTxt.Text = "Цвет текста портала:"
+pLblTxt.TextColor3 = Color3.fromRGB(200, 200, 210)
+pLblTxt.TextSize = 10
+pLblTxt.TextXAlignment = Enum.TextXAlignment.Left
+
+createColorPicker(t4, newPortalTxt, function(c) newPortalTxt = c end)
+
+local addPortalBtn = Instance.new("TextButton", t4)
+addPortalBtn.Size = UDim2.new(1, 0, 0, 32)
+addPortalBtn.BackgroundColor3 = Color3.fromRGB(70, 50, 140)
+addPortalBtn.Text = "🌀 Создать портал здесь"
+addPortalBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+addPortalBtn.TextSize = 12
+Instance.new("UICorner", addPortalBtn).CornerRadius = UDim.new(0, 6)
+
+local portalDiv = Instance.new("Frame", t4)
+portalDiv.Size = UDim2.new(1, 0, 0, 4)
+portalDiv.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+Instance.new("UICorner", portalDiv).CornerRadius = UDim.new(1, 0)
+
+local portalsContainer = Instance.new("Frame", t4)
+portalsContainer.Size = UDim2.new(1, 0, 0, 0)
+portalsContainer.BackgroundTransparency = 1
+portalsContainer.AutomaticSize = Enum.AutomaticSize.Y
+local ptLayout = Instance.new("UIListLayout", portalsContainer)
+ptLayout.Padding = UDim.new(0, 6)
+ptLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local refreshPortalsUI
+
+local function findPortal(name)
+    for i, p in ipairs(portalsData) do
+        if p.Name == name then return p, i end
+    end
+end
+
+-- Телепорт через портал: активный портал + ожидание цели
+local portalMenuFrame -- создаём ниже
+local function makePortalCard(p, idx)
+    local item = Instance.new("Frame", portalsContainer)
+    item.Size = UDim2.new(1, 0, 0, 72)
+    item.BackgroundColor3 = p.ColorBg or Color3.fromRGB(60, 40, 120)
+    Instance.new("UICorner", item).CornerRadius = UDim.new(0, 6)
+    
+    local lbl = Instance.new("TextLabel", item)
+    lbl.Size = UDim2.new(0.6, 0, 0, 20)
+    lbl.Position = UDim2.new(0.03, 0, 0, 3)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = p.Name
+    lbl.TextColor3 = p.ColorTxt or Color3.fromRGB(255,255,255)
+    lbl.TextSize = 12
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextTruncate = Enum.TextTruncate.AtEnd
+    
+    local linkLbl = Instance.new("TextLabel", item)
+    linkLbl.Size = UDim2.new(0.6, 0, 0, 16)
+    linkLbl.Position = UDim2.new(0.03, 0, 0, 24)
+    linkLbl.BackgroundTransparency = 1
+    linkLbl.Text = p.LinkedTo and ("↪ Связан: "..p.LinkedTo) or "не связан"
+    linkLbl.TextColor3 = Color3.fromRGB(220, 220, 235)
+    linkLbl.TextSize = 10
+    linkLbl.TextXAlignment = Enum.TextXAlignment.Left
+    linkLbl.TextTruncate = Enum.TextTruncate.AtEnd
+    
+    local enterBtn = Instance.new("TextButton", item)
+    enterBtn.Size = UDim2.new(0, 65, 0, 24)
+    enterBtn.Position = UDim2.new(1, -185, 0, 4)
+    enterBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 160)
+    enterBtn.Text = "Войти"
+    enterBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    enterBtn.TextSize = 10
+    Instance.new("UICorner", enterBtn).CornerRadius = UDim.new(0, 4)
+    enterBtn.MouseButton1Click:Connect(function()
+        -- Если есть LinkedTo — телепорт к связанному
+        if p.LinkedTo then
+            local target = findPortal(p.LinkedTo)
+            if target then
+                local r = getRoot()
+                if r then r.CFrame = CFrame.new(unpack(target.Pos)) end
+            else
+                enterBtn.Text = "Нет связи"
+                task.delay(1, function() enterBtn.Text = "Войти" end)
+            end
+        else
+            -- Войти в этот портал (встать на его место)
+            local r = getRoot()
+            if r then r.CFrame = CFrame.new(unpack(p.Pos)) end
+        end
+    end)
+    
+    local linkBtn = Instance.new("TextButton", item)
+    linkBtn.Size = UDim2.new(0, 60, 0, 24)
+    linkBtn.Position = UDim2.new(1, -118, 0, 4)
+    linkBtn.BackgroundColor3 = Color3.fromRGB(90, 70, 140)
+    linkBtn.Text = "Связь"
+    linkBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    linkBtn.TextSize = 10
+    Instance.new("UICorner", linkBtn).CornerRadius = UDim.new(0, 4)
+    linkBtn.MouseButton1Click:Connect(function()
+        -- Диалог выбора цели
+        local dlg = Instance.new("Frame", main)
+        dlg.Size = UDim2.new(0, 240, 0, 240)
+        dlg.Position = UDim2.new(0.5, -120, 0.5, -120)
+        dlg.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+        dlg.ZIndex = 20
+        Instance.new("UICorner", dlg).CornerRadius = UDim.new(0, 10)
+        Instance.new("UIStroke", dlg).Color = Color3.fromRGB(120, 100, 200)
+        makeDraggable(dlg)
+        
+        local tt = Instance.new("TextLabel", dlg)
+        tt.Size = UDim2.new(1, -20, 0, 26)
+        tt.Position = UDim2.new(0, 10, 0, 5)
+        tt.BackgroundTransparency = 1
+        tt.Text = "Связать "..p.Name.." с:"
+        tt.TextColor3 = Color3.fromRGB(255,255,255)
+        tt.TextSize = 11
+        tt.Font = Enum.Font.GothamBold
+        tt.TextXAlignment = Enum.TextXAlignment.Left
+        
+        local sc = Instance.new("ScrollingFrame", dlg)
+        sc.Size = UDim2.new(1, -20, 1, -80)
+        sc.Position = UDim2.new(0, 10, 0, 34)
+        sc.BackgroundTransparency = 1
+        sc.CanvasSize = UDim2.new(0, 0, 0, 0)
+        sc.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        sc.ScrollBarThickness = 3
+        local li = Instance.new("UIListLayout", sc)
+        li.Padding = UDim.new(0, 4)
+        
+        for _, other in ipairs(portalsData) do
+            if other.Name ~= p.Name then
+                local ob = Instance.new("TextButton", sc)
+                ob.Size = UDim2.new(1, 0, 0, 28)
+                ob.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+                ob.Text = other.Name
+                ob.TextColor3 = Color3.fromRGB(255,255,255)
+                ob.TextSize = 11
+                Instance.new("UICorner", ob).CornerRadius = UDim.new(0, 4)
+                ob.MouseButton1Click:Connect(function()
+                    p.LinkedTo = other.Name
+                    dlg:Destroy()
+                    refreshPortalsUI()
+                end)
+            end
+        end
+        
+        local unlink = Instance.new("TextButton", dlg)
+        unlink.Size = UDim2.new(1, -20, 0, 26)
+        unlink.Position = UDim2.new(0, 10, 1, -32)
+        unlink.BackgroundColor3 = Color3.fromRGB(120, 50, 50)
+        unlink.Text = "Убрать связь"
+        unlink.TextColor3 = Color3.fromRGB(255,255,255)
+        unlink.TextSize = 11
+        Instance.new("UICorner", unlink).CornerRadius = UDim.new(0, 4)
+        unlink.MouseButton1Click:Connect(function()
+            p.LinkedTo = nil
+            dlg:Destroy()
+            refreshPortalsUI()
+        end)
+    end)
+    
+    local delBtn = Instance.new("TextButton", item)
+    delBtn.Size = UDim2.new(0, 50, 0, 24)
+    delBtn.Position = UDim2.new(1, -56, 0, 4)
+    delBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
+    delBtn.Text = "Удал."
+    delBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    delBtn.TextSize = 10
+    Instance.new("UICorner", delBtn).CornerRadius = UDim.new(0, 4)
+    delBtn.MouseButton1Click:Connect(function()
+        -- Чистим связи у тех, кто ссылался на этот портал
+        for _, other in ipairs(portalsData) do
+            if other.LinkedTo == p.Name then other.LinkedTo = nil end
+        end
+        table.remove(portalsData, idx)
+        refreshPortalsUI()
+    end)
+    
+    -- Кнопка смены цвета
+    local colorBtn = Instance.new("TextButton", item)
+    colorBtn.Size = UDim2.new(0, 110, 0, 22)
+    colorBtn.Position = UDim2.new(0.03, 0, 0, 44)
+    colorBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+    colorBtn.Text = "🎨 Сменить цвет"
+    colorBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    colorBtn.TextSize = 10
+    Instance.new("UICorner", colorBtn).CornerRadius = UDim.new(0, 4)
+    colorBtn.MouseButton1Click:Connect(function()
+        local dlg = Instance.new("Frame", main)
+        dlg.Size = UDim2.new(0, 260, 0, 240)
+        dlg.Position = UDim2.new(0.5, -130, 0.5, -120)
+        dlg.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+        dlg.ZIndex = 20
+        Instance.new("UICorner", dlg).CornerRadius = UDim.new(0, 10)
+        makeDraggable(dlg)
+        
+        local tt = Instance.new("TextLabel", dlg)
+        tt.Size = UDim2.new(1, -20, 0, 24)
+        tt.Position = UDim2.new(0, 10, 0, 5)
+        tt.BackgroundTransparency = 1
+        tt.Text = "Фон портала "..p.Name
+        tt.TextColor3 = Color3.fromRGB(255,255,255)
+        tt.TextSize = 11
+        tt.Font = Enum.Font.GothamBold
+        tt.TextXAlignment = Enum.TextXAlignment.Left
+        
+        createColorPicker(dlg, p.ColorBg or Color3.fromRGB(60,40,120), function(c)
+            p.ColorBg = c
+            refreshPortalsUI()
+        end)
+        
+        local tt2 = Instance.new("TextLabel", dlg)
+        tt2.Size = UDim2.new(1, -20, 0, 16)
+        tt2.Position = UDim2.new(0, 10, 0, 90)
+        tt2.BackgroundTransparency = 1
+        tt2.Text = "Цвет текста:"
+        tt2.TextColor3 = Color3.fromRGB(200,200,210)
+        tt2.TextSize = 10
+        tt2.TextXAlignment = Enum.TextXAlignment.Left
+        
+        createColorPicker(dlg, p.ColorTxt or Color3.fromRGB(255,255,255), function(c)
+            p.ColorTxt = c
+            refreshPortalsUI()
+        end)
+        
+        local closeD = Instance.new("TextButton", dlg)
+        closeD.Size = UDim2.new(1, -20, 0, 26)
+        closeD.Position = UDim2.new(0, 10, 1, -32)
+        closeD.BackgroundColor3 = Color3.fromRGB(60, 40, 40)
+        closeD.Text = "Готово"
+        closeD.TextColor3 = Color3.fromRGB(255,255,255)
+        closeD.TextSize = 11
+        Instance.new("UICorner", closeD).CornerRadius = UDim.new(0, 4)
+        closeD.MouseButton1Click:Connect(function() dlg:Destroy() end)
+    end)
+end
+
+refreshPortalsUI = function()
+    for _, c in ipairs(portalsContainer:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+    for i, p in ipairs(portalsData) do
+        makePortalCard(p, i)
+    end
+end
+
+addPortalBtn.MouseButton1Click:Connect(function()
+    local root = getRoot()
+    if not root then return end
+    local pos = root.CFrame
+    local pName = (portalNameInput.Text ~= "") and portalNameInput.Text or ("Портал"..#portalsData+1)
+    table.insert(portalsData, {
+        Name = pName,
+        Pos = {pos.X, pos.Y, pos.Z},
+        ColorBg = newPortalBg,
+        ColorTxt = newPortalTxt,
+        LinkedTo = nil
+    })
+    refreshPortalsUI()
+end)
+-- ==================== ВКЛАДКА 5: КООРДИНАТЫ / ПИКЕР ТОЧКИ ====================
+-- Отображение своих координат в реальном времени
+local myPosLabel = Instance.new("TextLabel", t5)
+myPosLabel.Size = UDim2.new(1, 0, 0, 60)
+myPosLabel.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+myPosLabel.TextColor3 = Color3.fromRGB(200, 255, 200)
+myPosLabel.TextSize = 13
+myPosLabel.Font = Enum.Font.Code
+myPosLabel.Text = "Загрузка..."
+Instance.new("UICorner", myPosLabel).CornerRadius = UDim.new(0, 6)
+
+RunService.RenderStepped:Connect(function()
+    local r = getRoot()
+    if r then
+        myPosLabel.Text = string.format("Мои координаты:\nX: %.2f   Y: %.2f   Z: %.2f", r.Position.X, r.Position.Y, r.Position.Z)
+    else
+        myPosLabel.Text = "Персонаж не найден"
+    end
+end)
+
+-- Кнопка «Пикер точки»: клик по миру -> получаем координаты + круг
+local pickerActive = false
+local pickerCircle = nil
+local pickerColor = Color3.fromRGB(0, 255, 150)
+
+local pickBtn = Instance.new("TextButton", t5)
+pickBtn.Size = UDim2.new(1, 0, 0, 32)
+pickBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+pickBtn.Text = "🎯 Выбрать точку кликом: ВЫКЛ"
+pickBtn.TextColor3 = Color3.fromRGB(240, 240, 240)
+pickBtn.TextSize = 12
+Instance.new("UICorner", pickBtn).CornerRadius = UDim.new(0, 6)
+
+local coordsResultLabel = Instance.new("TextLabel", t5)
+coordsResultLabel.Size = UDim2.new(1, 0, 0, 50)
+coordsResultLabel.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+coordsResultLabel.TextColor3 = Color3.fromRGB(180, 220, 255)
+coordsResultLabel.TextSize = 12
+coordsResultLabel.Font = Enum.Font.Code
+coordsResultLabel.Text = "Кликните по миру после включения"
+coordsResultLabel.TextWrapped = true
+Instance.new("UICorner", coordsResultLabel).CornerRadius = UDim.new(0, 6)
+
+local copyCoordsBtn = Instance.new("TextButton", t5)
+copyCoordsBtn.Size = UDim2.new(1, 0, 0, 28)
+copyCoordsBtn.BackgroundColor3 = Color3.fromRGB(40, 80, 130)
+copyCoordsBtn.Text = "📋 Скопировать координаты"
+copyCoordsBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+copyCoordsBtn.TextSize = 11
+Instance.new("UICorner", copyCoordsBtn).CornerRadius = UDim.new(0, 6)
+
+local lastPickedCoords = nil
+copyCoordsBtn.MouseButton1Click:Connect(function()
+    if lastPickedCoords and setclipboard then
+        setclipboard(string.format("%.2f, %.2f, %.2f", lastPickedCoords.X, lastPickedCoords.Y, lastPickedCoords.Z))
+        copyCoordsBtn.Text = "Скопировано!"
+        task.delay(1, function() copyCoordsBtn.Text = "📋 Скопировать координаты" end)
+    end
+end)
+
+-- Цвет круга пикера
+local cPickLbl = Instance.new("TextLabel", t5)
+cPickLbl.Size = UDim2.new(1, 0, 0, 16)
+cPickLbl.BackgroundTransparency = 1
+cPickLbl.Text = "Цвет круга пикера:"
+cPickLbl.TextColor3 = Color3.fromRGB(200,200,210)
+cPickLbl.TextSize = 10
+cPickLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+createColorPicker(t5, pickerColor, function(c)
+    pickerColor = c
+    if pickerCircle then pickerCircle.Color = c end
+end)
+
+local function destroyCircle()
+    if pickerCircle then pickerCircle:Destroy(); pickerCircle = nil end
+end
+
+local function createCircleAt(pos)
+    destroyCircle()
+    local circle = Instance.new("Part")
+    circle.Shape = Enum.PartType.Cylinder
+    circle.Anchored = true
+    circle.CanCollide = false
+    circle.Material = Enum.Material.Neon
+    circle.Color = pickerColor
+    circle.Transparency = 0.3
+    circle.Size = Vector3.new(0.2, 8, 8)
+    circle.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
+    circle.Name = "TeleportHubPickerCircle"
+    circle.Parent = workspace
+    pickerCircle = circle
+end
+
+pickBtn.MouseButton1Click:Connect(function()
+    pickerActive = not pickerActive
+    pickBtn.Text = pickerActive and "🎯 Выбрать точку кликом: ВКЛ" or "🎯 Выбрать точку кликом: ВЫКЛ"
+    pickBtn.BackgroundColor3 = pickerActive and Color3.fromRGB(40, 120, 60) or Color3.fromRGB(28, 28, 36)
+end)
+
+-- Обработка клика по миру для пикера (не мешаем Клик-ТП)
+mouse.Button1Down:Connect(function()
+    if pickerActive and mouse.Target then
+        local hit = mouse.Hit.Position
+        lastPickedCoords = hit
+        coordsResultLabel.Text = string.format("Координаты:\nX: %.2f   Y: %.2f   Z: %.2f", hit.X, hit.Y, hit.Z)
+        createCircleAt(hit)
+    end
+end)
+
+-- ==================== «ДРУГОЕ» (переносим сюда Клик-ТП и кнопки) ====================
+local clickTpBtn = Instance.new("TextButton", t5)
+clickTpBtn.Size = UDim2.new(1, 0, 0, 32)
+clickTpBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+clickTpBtn.Text = "🎯 Клик-ТП: ВЫКЛ"
+clickTpBtn.TextColor3 = Color3.fromRGB(240, 240, 240)
+clickTpBtn.TextSize = 12
+Instance.new("UICorner", clickTpBtn).CornerRadius = UDim.new(0, 6)
+clickTpBtn.MouseButton1Click:Connect(function()
+    clickTpActive = not clickTpActive
+    clickTpBtn.Text = clickTpActive and "🎯 Клик-ТП: ВКЛ" or "🎯 Клик-ТП: ВЫКЛ"
+    clickTpBtn.BackgroundColor3 = clickTpActive and Color3.fromRGB(40, 120, 60) or Color3.fromRGB(28, 28, 36)
+end)
+
+mouse.Button1Down:Connect(function()
+    -- Клик-ТП не срабатывает при активном пикере
+    if clickTpActive and not pickerActive and mouse.Target then
+        local r = getRoot()
+        if r then r.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0)) end
+    end
+end)
+
+local function addOtherBtn(parent, txt, callback)
+    local b = Instance.new("TextButton", parent)
+    b.Size = UDim2.new(1, 0, 0, 32)
+    b.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+    b.Text = txt
+    b.TextColor3 = Color3.fromRGB(240, 240, 240)
+    b.TextSize = 12
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    b.MouseButton1Click:Connect(callback)
+end
+
+addOtherBtn(t5, "🚀 ТП Вперёд (30)", function()
+    local r = getRoot(); if r then r.CFrame = r.CFrame + (r.CFrame.LookVector * 30) end
+end)
+addOtherBtn(t5, "⬆️ ТП Наверх (+30)", function()
+    local r = getRoot(); if r then r.CFrame = r.CFrame + Vector3.new(0, 30, 0) end
+end)
+addOtherBtn(t5, "⬇️ ТП Вниз (-30)", function()
+    local r = getRoot(); if r then r.CFrame = r.CFrame + Vector3.new(0, -30, 0) end
+end)
+-- ==================== ВКЛАДКА 6: FREECAM ====================
+local freeCamActive = false
+local camConn = nil
+local savedCamCFrame = nil
+local freeCamSpeed = 1
+local keys = {W=false,A=false,S=false,D=false,Space=false,Shift=false}
+
+local freeCamBtn = Instance.new("TextButton", t6)
+freeCamBtn.Size = UDim2.new(1, 0, 0, 36)
+freeCamBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+freeCamBtn.Text = "🎥 Free Camera: ВЫКЛ"
+freeCamBtn.TextColor3 = Color3.fromRGB(240, 240, 240)
+freeCamBtn.TextSize = 13
+Instance.new("UICorner", freeCamBtn).CornerRadius = UDim.new(0, 6)
+
+local tpToCamBtn = Instance.new("TextButton", t6)
+tpToCamBtn.Size = UDim2.new(1, 0, 0, 32)
+tpToCamBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 160)
+tpToCamBtn.Text = "🚀 Телепорт к камере"
+tpToCamBtn.TextColor3 = Color3.fromRGB(255,255,255)
+tpToCamBtn.TextSize = 12
+tpToCamBtn.Visible = false
+Instance.new("UICorner", tpToCamBtn).CornerRadius = UDim.new(0, 6)
+
+local speedLbl = Instance.new("TextLabel", t6)
+speedLbl.Size = UDim2.new(1, 0, 0, 18)
+speedLbl.BackgroundTransparency = 1
+speedLbl.Text = "Скорость FreeCam: 1.0x"
+speedLbl.TextColor3 = Color3.fromRGB(200,200,210)
+speedLbl.TextSize = 11
+speedLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local speedSlider = Instance.new("Frame", t6)
+speedSlider.Size = UDim2.new(1, 0, 0, 30)
+speedSlider.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+Instance.new("UICorner", speedSlider).CornerRadius = UDim.new(0, 6)
+
+local speedFill = Instance.new("Frame", speedSlider)
+speedFill.Size = UDim2.new(0.1, 0, 1, 0)
+speedFill.BackgroundColor3 = Color3.fromRGB(80, 140, 220)
+Instance.new("UICorner", speedFill).CornerRadius = UDim.new(0, 6)
+
+local speedHandle = Instance.new("Frame", speedFill)
+speedHandle.Size = UDim2.new(0, 16, 1, 0)
+speedHandle.Position = UDim2.new(1, -16, 0, 0)
+speedHandle.BackgroundColor3 = Color3.fromRGB(230, 230, 255)
+Instance.new("UICorner", speedHandle).CornerRadius = UDim.new(1, 0)
+
+local function setSpeedFromX(mx)
+    local abs = speedSlider.AbsolutePosition
+    local w = speedSlider.AbsoluteSize.X
+    local rel = math.clamp((mx - abs.X) / w, 0.01, 1)
+    speedFill.Size = UDim2.new(rel, 0, 1, 0)
+    freeCamSpeed = rel * 5 -- от 0.05 до 5
+    speedLbl.Text = string.format("Скорость FreeCam: %.2fx", freeCamSpeed)
+end
+
+local sliderDragging = false
+speedSlider.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        sliderDragging = true
+        setSpeedFromX(i.Position.X)
+    end
+end)
+UserInputService.InputChanged:Connect(function(i)
+    if sliderDragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+        setSpeedFromX(i.Position.X)
+    end
+end)
+UserInputService.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        sliderDragging = false
+    end
+end)
+
+local hintLbl = Instance.new("TextLabel", t6)
+hintLbl.Size = UDim2.new(1, 0, 0, 40)
+hintLbl.BackgroundColor3 = Color3.fromRGB(25, 25, 33)
+hintLbl.Text = "Управление: WASD — движение, Space/Shift — вверх/вниз, ПКМ — поворот"
+hintLbl.TextColor3 = Color3.fromRGB(180,180,200)
+hintLbl.TextSize = 10
+hintLbl.TextWrapped = true
+Instance.new("UICorner", hintLbl).CornerRadius = UDim.new(0, 6)
+
+-- Ввод клавиш
+UserInputService.InputBegan:Connect(function(i, gp)
+    if freeCamActive then
+        if i.KeyCode == Enum.KeyCode.W then keys.W = true
+        elseif i.KeyCode == Enum.KeyCode.A then keys.A = true
+        elseif i.KeyCode == Enum.KeyCode.S then keys.S = true
+        elseif i.KeyCode == Enum.KeyCode.D then keys.D = true
+        elseif i.KeyCode == Enum.KeyCode.Space then keys.Space = true
+        elseif i.KeyCode == Enum.KeyCode.LeftShift then keys.Shift = true
+        end
+    end
+end)
+UserInputService.InputEnded:Connect(function(i)
+    if i.KeyCode == Enum.KeyCode.W then keys.W = false
+    elseif i.KeyCode == Enum.KeyCode.A then keys.A = false
+    elseif i.KeyCode == Enum.KeyCode.S then keys.S = false
+    elseif i.KeyCode == Enum.KeyCode.D then keys.D = false
+    elseif i.KeyCode == Enum.KeyCode.Space then keys.Space = false
+    elseif i.KeyCode == Enum.KeyCode.LeftShift then keys.Shift = false
+    end
+end)
+
+local freeCamCFrame = CFrame.new()
+
+local function toggleFreeCam(on)
+    freeCamActive = on
+    freeCamBtn.Text = on and "🎥 Free Camera: ВКЛ" or "🎥 Free Camera: ВЫКЛ"
+    freeCamBtn.BackgroundColor3 = on and Color3.fromRGB(40, 120, 60) or Color3.fromRGB(30, 30, 40)
+    tpToCamBtn.Visible = on
+    if on then
+        savedCamCFrame = workspace.CurrentCamera.CFrame
+        freeCamCFrame = workspace.CurrentCamera.CFrame
+        workspace.CurrentCamera.CameraType = Enum.CameraType.Scriptable
+        
+        camConn = RunService.RenderStepped:Connect(function(dt)
+            local move = Vector3.new()
+            if keys.W then move += freeCamCFrame.LookVector end
+            if keys.S then move -= freeCamCFrame.LookVector end
+            if keys.D then move += freeCamCFrame.RightVector end
+            if keys.A then move -= freeCamCFrame.RightVector end
+            if keys.Space then move += Vector3.new(0,1,0) end
+            if keys.Shift then move -= Vector3.new(0,1,0) end
+            if move.Magnitude > 0 then
+                freeCamCFrame = freeCamCFrame + move.Unit * (freeCamSpeed * 30 * dt)
+            end
+            workspace.CurrentCamera.CFrame = freeCamCFrame
+        end)
+    else
+        if camConn then camConn:Disconnect(); camConn = nil end
+        if savedCamCFrame then
+            workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+            workspace.CurrentCamera.CFrame = savedCamCFrame
+        end
+        savedCamCFrame = nil
+    end
+end
+
+freeCamBtn.MouseButton1Click:Connect(function() toggleFreeCam(not freeCamActive) end)
+
+tpToCamBtn.MouseButton1Click:Connect(function()
+    if freeCamActive then
+        local camPos = workspace.CurrentCamera.CFrame.Position
+        local r = getRoot()
+        if r then
+            r.CFrame = CFrame.new(camPos)
+            toggleFreeCam(false)
+        end
+    end
+end)
+
+-- ==================== ВКЛАДКА 3: КОНФИГИ ====================
+local configNameInput = Instance.new("TextBox", t3)
+configNameInput.Size = UDim2.new(1, 0, 0, 32)
+configNameInput.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+configNameInput.Text = "МойКонфиг"
+configNameInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+configNameInput.TextSize = 12
+configNameInput.ClearTextOnFocus = false
+Instance.new("UICorner", configNameInput).CornerRadius = UDim.new(0, 6)
+
+local saveConfigBtn = Instance.new("TextButton", t3)
+saveConfigBtn.Size = UDim2.new(1, 0, 0, 32)
+saveConfigBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 60)
+saveConfigBtn.Text = "💾 Сохранить конфиг"
+saveConfigBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+saveConfigBtn.TextSize = 12
+Instance.new("UICorner", saveConfigBtn).CornerRadius = UDim.new(0, 6)
+
+local divider2 = Instance.new("Frame", t3)
+divider2.Size = UDim2.new(1, 0, 0, 4)
+divider2.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+Instance.new("UICorner", divider2).CornerRadius = UDim.new(1, 0)
+
+local configsContainer = Instance.new("Frame", t3)
+configsContainer.Size = UDim2.new(1, 0, 0, 0)
+configsContainer.BackgroundTransparency = 1
+configsContainer.AutomaticSize = Enum.AutomaticSize.Y
+local cfgLayout = Instance.new("UIListLayout", configsContainer)
+cfgLayout.Padding = UDim.new(0, 6)
+cfgLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local function saveConfigsToFile()
+    if writefile then
+        local ok, encoded = pcall(function()
+            return HttpService:JSONEncode({
+                Configs = savedConfigsList,
+                Portals = portalsData
+            })
+        end)
+        if ok then writefile(CONFIGS_FILENAME, encoded) end
+    end
+end
+
+local function deepCopy(t)
+    if type(t) ~= "table" then return t end
+    local r = {}
+    for k,v in pairs(t) do r[k] = deepCopy(v) end
+    return r
+end
+
+local function createConfigUI(cName, configData)
+    local item = Instance.new("Frame", configsContainer)
+    item.Size = UDim2.new(1, 0, 0, 36)
+    item.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+    Instance.new("UICorner", item).CornerRadius = UDim.new(0, 6)
+    
+    local lbl = Instance.new("TextLabel", item)
+    lbl.Size = UDim2.new(0.5, 0, 1, 0)
+    lbl.Position = UDim2.new(0.03, 0, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = cName
+    lbl.TextColor3 = Color3.fromRGB(240, 240, 240)
+    lbl.TextSize = 12
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextTruncate = Enum.TextTruncate.AtEnd
+    
+    local loadBtn = Instance.new("TextButton", item)
+    loadBtn.Size = UDim2.new(0, 65, 0, 26)
+    loadBtn.Position = UDim2.new(1, -127, 0.5, -13)
+    loadBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 60)
+    loadBtn.Text = "Загрузить"
+    loadBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    loadBtn.TextSize = 10
+    Instance.new("UICorner", loadBtn).CornerRadius = UDim.new(0, 4)
+    
+    loadBtn.MouseButton1Click:Connect(function()
+        if configData.Points then
+            savedPointsData = deepCopy(configData.Points)
+            refreshPointsUI()
+        end
+        if configData.Portals then
+            portalsData = deepCopy(configData.Portals)
+            refreshPortalsUI()
+        end
+        if configData.Settings then
+            clickTpActive = configData.Settings.ClickTpActive or false
+            clickTpBtn.Text = clickTpActive and "🎯 Клик-ТП: ВКЛ" or "🎯 Клик-ТП: ВЫКЛ"
+            clickTpBtn.BackgroundColor3 = clickTpActive and Color3.fromRGB(40, 120, 60) or Color3.fromRGB(28, 28, 36)
+        end
+        for i, p in ipairs(pages) do
+            p.page.Visible = (i == 1)
+            p.btn.BackgroundColor3 = (i == 1) and Color3.fromRGB(45, 45, 60) or Color3.fromRGB(25, 25, 33)
+        end
+        loadBtn.Text = "Готово!"
+        task.delay(1, function() loadBtn.Text = "Загрузить" end)
+    end)
+    
+    local delBtn = Instance.new("TextButton", item)
+    delBtn.Size = UDim2.new(0, 55, 0, 26)
+    delBtn.Position = UDim2.new(1, -58, 0.5, -13)
+    delBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
+    delBtn.Text = "Удалить"
+    delBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    delBtn.TextSize = 10
+    Instance.new("UICorner", delBtn).CornerRadius = UDim.new(0, 4)
+    
+    delBtn.MouseButton1Click:Connect(function()
+        for i, cfg in ipairs(savedConfigsList) do
+            if cfg.Name == cName then table.remove(savedConfigsList, i) break end
+        end
+        saveConfigsToFile()
+        item:Destroy()
+    end)
+end
+
+saveConfigBtn.MouseButton1Click:Connect(function()
+    local cName = (configNameInput.Text ~= "") and configNameInput.Text or "Конфиг"
+    local configData = {
+        Name = cName,
+        Points = deepCopy(savedPointsData),
+        Portals = deepCopy(portalsData),
+        Settings = { ClickTpActive = clickTpActive }
+    }
+    
+    local found = false
+    for _, cfg in ipairs(savedConfigsList) do
+        if cfg.Name == cName then
+            cfg.Points = configData.Points
+            cfg.Portals = configData.Portals
+            cfg.Settings = configData.Settings
+            found = true
+            break
+        end
+    end
+    if not found then table.insert(savedConfigsList, configData) end
+    saveConfigsToFile()
+    
+    for _, child in ipairs(configsContainer:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+    for _, cfg in ipairs(savedConfigsList) do
+        createConfigUI(cfg.Name, cfg)
+    end
+end)
+
+-- ==================== АВТОЗАГРУЗКА ====================
+if readfile and isfile and isfile(CONFIGS_FILENAME) then
+    local ok, decoded = pcall(function() return HttpService:JSONDecode(readfile(CONFIGS_FILENAME)) end)
+    if ok and decoded then
+        if decoded.Configs then
+            savedConfigsList = decoded.Configs
+            for _, cfg in ipairs(savedConfigsList) do
+                createConfigUI(cfg.Name, cfg)
+            end
+        end
+        if decoded.Portals then
+            portalsData = decoded.Portals
+            refreshPortalsUI()
+        end
+    end
+end
