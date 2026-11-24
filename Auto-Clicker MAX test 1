@@ -1,0 +1,1506 @@
+-- AutoClicker v5 Max — Часть 1/3 (Инициализация, утилиты и главное окно)
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
+local TweenService = game:GetService("TweenService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local GUI_NAME = "VortexAutoClickerGui_v5_Max"
+local GLOBAL_CLEANUP_KEY = "_VortexAutoClickerCleanup_v5_Max"
+
+if _G[GLOBAL_CLEANUP_KEY] then
+	pcall(_G[GLOBAL_CLEANUP_KEY])
+	_G[GLOBAL_CLEANUP_KEY] = nil
+end
+
+local oldGui = playerGui:FindFirstChild(GUI_NAME)
+if oldGui then
+	oldGui:Destroy()
+end
+
+local DEFAULT_INTERVAL_MS = 100
+local DEFAULT_HOLD_MS = 15
+local DEFAULT_OFFSET_X = 35
+local DEFAULT_OFFSET_Y = 105
+
+local isRunning = false
+local isMinimized = false
+local runMode = "TOGETHER" -- "TOGETHER" ("Вместе") или "SEPARATE" ("Отдельно")
+local defaultIntervalSec = DEFAULT_INTERVAL_MS / 1000
+local holdSec = DEFAULT_HOLD_MS / 1000
+local jitterMs = 0
+local jitterPx = 0
+local startDelaySec = 0
+local clickLimit = 0 -- 0 = бесконечно
+local autoMinimizeOnStart = false
+local useTopInsetFix = false
+local hotkeyCode = Enum.KeyCode.F6
+
+local offsetX = DEFAULT_OFFSET_X
+local offsetY = DEFAULT_OFFSET_Y
+local clickCount = 0
+
+local markers = {}
+local selectedMarker = nil
+local connections = {}
+local destroyed = false
+local runToken = 0
+
+local function trackConn(conn)
+	table.insert(connections, conn)
+	return conn
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = GUI_NAME
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.DisplayOrder = 999999
+pcall(function()
+	screenGui.IgnoreGuiInset = true
+end)
+screenGui.Parent = playerGui
+
+local markersFolder = Instance.new("Folder")
+markersFolder.Name = "Markers"
+markersFolder.Parent = screenGui
+
+local function rgbToHex(c)
+	local r = math.clamp(math.round(c.R * 255), 0, 255)
+	local g = math.clamp(math.round(c.G * 255), 0, 255)
+	local b = math.clamp(math.round(c.B * 255), 0, 255)
+	return string.format("#%02X%02X%02X", r, g, b)
+end
+
+local function hexToColor3(str)
+	if not str then
+		return nil
+	end
+	local clean = string.gsub(str, "[#%s]", "")
+	if #clean == 3 then
+		clean = string.sub(clean, 1, 1):rep(2)
+			.. string.sub(clean, 2, 2):rep(2)
+			.. string.sub(clean, 3, 3):rep(2)
+	end
+	if #clean ~= 6 or string.match(clean, "[^%x]") then
+		return nil
+	end
+	local r = tonumber(string.sub(clean, 1, 2), 16)
+	local g = tonumber(string.sub(clean, 3, 4), 16)
+	local b = tonumber(string.sub(clean, 5, 6), 16)
+	return Color3.fromRGB(r, g, b)
+end
+
+local function makeDraggableOrClickable(dragHandle, targetFrame, onClickWithoutDrag)
+	local dragging = false
+	local movedFar = false
+	local dragInput = nil
+	local dragStart = nil
+	local startPos = nil
+
+	trackConn(dragHandle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			movedFar = false
+			dragStart = input.Position
+			startPos = targetFrame.Position
+			dragInput = input
+
+			local endConn
+			endConn = input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					local wasTap = dragging and not movedFar
+					dragging = false
+					if endConn then
+						endConn:Disconnect()
+					end
+					if wasTap and onClickWithoutDrag then
+						onClickWithoutDrag()
+					end
+				end
+			end)
+		end
+	end))
+
+	trackConn(dragHandle.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+		end
+	end))
+
+	trackConn(UserInputService.InputChanged:Connect(function(input)
+		if dragging and input == dragInput then
+			local delta = input.Position - dragStart
+			if delta.Magnitude > 5 then
+				movedFar = true
+			end
+			if movedFar then
+				targetFrame.Position = UDim2.new(
+					startPos.X.Scale,
+					startPos.X.Offset + delta.X,
+					startPos.Y.Scale,
+					startPos.Y.Offset + delta.Y
+				)
+			end
+		end
+	end))
+end
+
+local function cleanupAll()
+	if destroyed then
+		return
+	end
+	destroyed = true
+	isRunning = false
+	runToken += 1
+
+	for _, conn in ipairs(connections) do
+		pcall(function()
+			conn:Disconnect()
+		end)
+	end
+	table.clear(connections)
+
+	if screenGui and screenGui.Parent then
+		screenGui:Destroy()
+	end
+
+	if _G[GLOBAL_CLEANUP_KEY] == cleanupAll then
+		_G[GLOBAL_CLEANUP_KEY] = nil
+	end
+end
+
+_G[GLOBAL_CLEANUP_KEY] = cleanupAll
+
+-- Главное окно
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 276, 0, 356)
+mainFrame.Position = UDim2.new(0.5, -138, 0.18, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(22, 24, 30)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Parent = screenGui
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 8)
+mainCorner.Parent = mainFrame
+
+local mainStroke = Instance.new("UIStroke")
+mainStroke.Color = Color3.fromRGB(55, 60, 75)
+mainStroke.Thickness = 1
+mainStroke.Parent = mainFrame
+
+local topBar = Instance.new("Frame")
+topBar.Name = "TopBar"
+topBar.Size = UDim2.new(1, 0, 0, 30)
+topBar.BackgroundColor3 = Color3.fromRGB(32, 35, 44)
+topBar.BorderSizePixel = 0
+topBar.Active = true
+topBar.Parent = mainFrame
+
+local topCorner = Instance.new("UICorner")
+topCorner.CornerRadius = UDim.new(0, 8)
+topCorner.Parent = topBar
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, -68, 1, 0)
+titleLabel.Position = UDim2.new(0, 10, 0, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "AutoClicker v5 Max (0)"
+titleLabel.TextColor3 = Color3.fromRGB(235, 238, 245)
+titleLabel.TextSize = 13
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = topBar
+
+local minBtn = Instance.new("TextButton")
+minBtn.Name = "MinimizeBtn"
+minBtn.Size = UDim2.new(0, 26, 0, 22)
+minBtn.Position = UDim2.new(1, -58, 0.5, -11)
+minBtn.BackgroundColor3 = Color3.fromRGB(50, 55, 68)
+minBtn.Text = "–"
+minBtn.TextColor3 = Color3.fromRGB(240, 240, 240)
+minBtn.TextSize = 16
+minBtn.Font = Enum.Font.GothamBold
+minBtn.Parent = topBar
+
+local minCorner = Instance.new("UICorner")
+minCorner.CornerRadius = UDim.new(0, 5)
+minCorner.Parent = minBtn
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Name = "CloseBtn"
+closeBtn.Size = UDim2.new(0, 26, 0, 22)
+closeBtn.Position = UDim2.new(1, -29, 0.5, -11)
+closeBtn.BackgroundColor3 = Color3.fromRGB(165, 48, 56)
+closeBtn.Text = "×"
+closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeBtn.TextSize = 16
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.Parent = topBar
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 5)
+closeCorner.Parent = closeBtn
+
+local miniPill = Instance.new("TextButton")
+miniPill.Name = "MiniPill"
+miniPill.Size = UDim2.new(0, 155, 0, 30)
+miniPill.Position = UDim2.new(0.5, -77, 0.14, 0)
+miniPill.BackgroundColor3 = Color3.fromRGB(30, 34, 44)
+miniPill.Text = "AC v5 Max [Открыть]"
+miniPill.TextColor3 = Color3.fromRGB(130, 220, 150)
+miniPill.TextSize = 12
+miniPill.Font = Enum.Font.GothamBold
+miniPill.Visible = false
+miniPill.Parent = screenGui
+
+local miniCorner = Instance.new("UICorner")
+miniCorner.CornerRadius = UDim.new(0, 8)
+miniCorner.Parent = miniPill
+
+local miniStroke = Instance.new("UIStroke")
+miniStroke.Color = Color3.fromRGB(70, 80, 100)
+miniStroke.Thickness = 1
+miniStroke.Parent = miniPill
+
+local bodyFrame = Instance.new("Frame")
+bodyFrame.Name = "Body"
+bodyFrame.Size = UDim2.new(1, -16, 1, -38)
+bodyFrame.Position = UDim2.new(0, 8, 0, 34)
+bodyFrame.BackgroundTransparency = 1
+bodyFrame.Parent = mainFrame
+
+local addBtn = Instance.new("TextButton")
+addBtn.Name = "AddBtn"
+addBtn.Size = UDim2.new(0.32, 0, 0, 30)
+addBtn.Position = UDim2.new(0, 0, 0, 0)
+addBtn.BackgroundColor3 = Color3.fromRGB(45, 95, 175)
+addBtn.Text = "+ Точка"
+addBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+addBtn.TextSize = 12
+addBtn.Font = Enum.Font.GothamBold
+addBtn.Parent = bodyFrame
+
+local addCorner = Instance.new("UICorner")
+addCorner.CornerRadius = UDim.new(0, 6)
+addCorner.Parent = addBtn
+
+local clearAllBtn = Instance.new("TextButton")
+clearAllBtn.Name = "ClearAllBtn"
+clearAllBtn.Size = UDim2.new(0.32, 0, 0, 30)
+clearAllBtn.Position = UDim2.new(0.34, 0, 0, 0)
+clearAllBtn.BackgroundColor3 = Color3.fromRGB(125, 48, 56)
+clearAllBtn.Text = "Очистить"
+clearAllBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+clearAllBtn.TextSize = 12
+clearAllBtn.Font = Enum.Font.GothamBold
+clearAllBtn.Parent = bodyFrame
+
+local clearCorner = Instance.new("UICorner")
+clearCorner.CornerRadius = UDim.new(0, 6)
+clearCorner.Parent = clearAllBtn
+
+local startBtn = Instance.new("TextButton")
+startBtn.Name = "StartBtn"
+startBtn.Size = UDim2.new(0.32, 0, 0, 30)
+startBtn.Position = UDim2.new(0.68, 0, 0, 0)
+startBtn.BackgroundColor3 = Color3.fromRGB(42, 145, 82)
+startBtn.Text = "Начать"
+startBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+startBtn.TextSize = 12
+startBtn.Font = Enum.Font.GothamBold
+startBtn.Parent = bodyFrame
+
+local startCorner = Instance.new("UICorner")
+startCorner.CornerRadius = UDim.new(0, 6)
+startCorner.Parent = startBtn
+
+-- Интервал и удержание клика
+local intervalLabel = Instance.new("TextLabel")
+intervalLabel.Size = UDim2.new(0.52, 0, 0, 22)
+intervalLabel.Position = UDim2.new(0, 0, 0, 36)
+intervalLabel.BackgroundTransparency = 1
+intervalLabel.Text = "Интервал / Удерж (мс):"
+intervalLabel.TextColor3 = Color3.fromRGB(195, 200, 212)
+intervalLabel.TextSize = 11
+intervalLabel.Font = Enum.Font.Gotham
+intervalLabel.TextXAlignment = Enum.TextXAlignment.Left
+intervalLabel.Parent = bodyFrame
+
+local intervalBox = Instance.new("TextBox")
+intervalBox.Size = UDim2.new(0.23, 0, 0, 22)
+intervalBox.Position = UDim2.new(0.53, 0, 0, 36)
+intervalBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+intervalBox.Text = tostring(DEFAULT_INTERVAL_MS)
+intervalBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+intervalBox.TextSize = 11
+intervalBox.Font = Enum.Font.GothamBold
+intervalBox.ClearTextOnFocus = false
+intervalBox.Parent = bodyFrame
+
+local holdBox = Instance.new("TextBox")
+holdBox.Size = UDim2.new(0.22, 0, 0, 22)
+holdBox.Position = UDim2.new(0.78, 0, 0, 36)
+holdBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+holdBox.Text = tostring(DEFAULT_HOLD_MS)
+holdBox.TextColor3 = Color3.fromRGB(170, 225, 255)
+holdBox.TextSize = 11
+holdBox.Font = Enum.Font.GothamBold
+holdBox.ClearTextOnFocus = false
+holdBox.Parent = bodyFrame
+
+-- Лимит кликов и сброс счётчика
+local limitLabel = Instance.new("TextLabel")
+limitLabel.Size = UDim2.new(0.45, 0, 0, 22)
+limitLabel.Position = UDim2.new(0, 0, 0, 62)
+limitLabel.BackgroundTransparency = 1
+limitLabel.Text = "Лимит (0=∞):"
+limitLabel.TextColor3 = Color3.fromRGB(195, 200, 212)
+limitLabel.TextSize = 11
+limitLabel.Font = Enum.Font.Gotham
+limitLabel.TextXAlignment = Enum.TextXAlignment.Left
+limitLabel.Parent = bodyFrame
+
+local limitBox = Instance.new("TextBox")
+limitBox.Size = UDim2.new(0.28, 0, 0, 22)
+limitBox.Position = UDim2.new(0.46, 0, 0, 62)
+limitBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+limitBox.Text = "0"
+limitBox.TextColor3 = Color3.fromRGB(255, 230, 150)
+limitBox.TextSize = 11
+limitBox.Font = Enum.Font.GothamBold
+limitBox.ClearTextOnFocus = false
+limitBox.Parent = bodyFrame
+
+local resetCountBtn = Instance.new("TextButton")
+resetCountBtn.Size = UDim2.new(0.24, 0, 0, 22)
+resetCountBtn.Position = UDim2.new(0.76, 0, 0, 62)
+resetCountBtn.BackgroundColor3 = Color3.fromRGB(55, 62, 78)
+resetCountBtn.Text = "0 счёт"
+resetCountBtn.TextColor3 = Color3.fromRGB(225, 230, 240)
+resetCountBtn.TextSize = 10
+resetCountBtn.Font = Enum.Font.GothamBold
+resetCountBtn.Parent = bodyFrame
+
+-- Рандом интервала (мс) и рандом координат (px)
+local jitterLabel = Instance.new("TextLabel")
+jitterLabel.Size = UDim2.new(0.52, 0, 0, 22)
+jitterLabel.Position = UDim2.new(0, 0, 0, 88)
+jitterLabel.BackgroundTransparency = 1
+jitterLabel.Text = "Рандом ±мс / ±px:"
+jitterLabel.TextColor3 = Color3.fromRGB(195, 200, 212)
+jitterLabel.TextSize = 11
+jitterLabel.Font = Enum.Font.Gotham
+jitterLabel.TextXAlignment = Enum.TextXAlignment.Left
+jitterLabel.Parent = bodyFrame
+
+local jitterMsBox = Instance.new("TextBox")
+jitterMsBox.Size = UDim2.new(0.23, 0, 0, 22)
+jitterMsBox.Position = UDim2.new(0.53, 0, 0, 88)
+jitterMsBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+jitterMsBox.Text = "0"
+jitterMsBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+jitterMsBox.TextSize = 11
+jitterMsBox.Font = Enum.Font.GothamBold
+jitterMsBox.ClearTextOnFocus = false
+jitterMsBox.Parent = bodyFrame
+
+local jitterPxBox = Instance.new("TextBox")
+jitterPxBox.Size = UDim2.new(0.22, 0, 0, 22)
+jitterPxBox.Position = UDim2.new(0.78, 0, 0, 88)
+jitterPxBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+jitterPxBox.Text = "0"
+jitterPxBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+jitterPxBox.TextSize = 11
+jitterPxBox.Font = Enum.Font.GothamBold
+jitterPxBox.ClearTextOnFocus = false
+jitterPxBox.Parent = bodyFrame
+
+-- Задержка старта (сек) и горячая клавиша (ПК)
+local delayLabel = Instance.new("TextLabel")
+delayLabel.Size = UDim2.new(0.45, 0, 0, 22)
+delayLabel.Position = UDim2.new(0, 0, 0, 114)
+delayLabel.BackgroundTransparency = 1
+delayLabel.Text = "Старт через (с):"
+delayLabel.TextColor3 = Color3.fromRGB(195, 200, 212)
+delayLabel.TextSize = 11
+delayLabel.Font = Enum.Font.Gotham
+delayLabel.TextXAlignment = Enum.TextXAlignment.Left
+delayLabel.Parent = bodyFrame
+
+local delayBox = Instance.new("TextBox")
+delayBox.Size = UDim2.new(0.22, 0, 0, 22)
+delayBox.Position = UDim2.new(0.46, 0, 0, 114)
+delayBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+delayBox.Text = "0"
+delayBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+delayBox.TextSize = 11
+delayBox.Font = Enum.Font.GothamBold
+delayBox.ClearTextOnFocus = false
+delayBox.Parent = bodyFrame
+
+local hotkeyBtn = Instance.new("TextButton")
+hotkeyBtn.Size = UDim2.new(0.30, 0, 0, 22)
+hotkeyBtn.Position = UDim2.new(0.70, 0, 0, 114)
+hotkeyBtn.BackgroundColor3 = Color3.fromRGB(55, 62, 78)
+hotkeyBtn.Text = "Key: F6"
+hotkeyBtn.TextColor3 = Color3.fromRGB(225, 230, 240)
+hotkeyBtn.TextSize = 10
+hotkeyBtn.Font = Enum.Font.GothamBold
+hotkeyBtn.Parent = bodyFrame
+
+-- Смещение X / Y, Inset и авто-сворачивание при старте
+local insetBtn = Instance.new("TextButton")
+insetBtn.Size = UDim2.new(0.48, 0, 0, 22)
+insetBtn.Position = UDim2.new(0, 0, 0, 140)
+insetBtn.BackgroundColor3 = Color3.fromRGB(55, 62, 78)
+insetBtn.Text = "Inset: ВЫКЛ"
+insetBtn.TextColor3 = Color3.fromRGB(225, 230, 240)
+insetBtn.TextSize = 10
+insetBtn.Font = Enum.Font.GothamBold
+insetBtn.Parent = bodyFrame
+
+local autoMinBtn = Instance.new("TextButton")
+autoMinBtn.Size = UDim2.new(0.48, 0, 0, 22)
+autoMinBtn.Position = UDim2.new(0.52, 0, 0, 140)
+autoMinBtn.BackgroundColor3 = Color3.fromRGB(55, 62, 78)
+autoMinBtn.Text = "Авто-сворот: НЕТ"
+autoMinBtn.TextColor3 = Color3.fromRGB(225, 230, 240)
+autoMinBtn.TextSize = 10
+autoMinBtn.Font = Enum.Font.GothamBold
+autoMinBtn.Parent = bodyFrame
+
+local offsetXBox = Instance.new("TextBox")
+offsetXBox.Size = UDim2.new(0.32, 0, 0, 24)
+offsetXBox.Position = UDim2.new(0, 0, 0, 166)
+offsetXBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+offsetXBox.Text = "X: " .. tostring(offsetX)
+offsetXBox.TextColor3 = Color3.fromRGB(220, 225, 235)
+offsetXBox.TextSize = 11
+offsetXBox.Font = Enum.Font.GothamBold
+offsetXBox.ClearTextOnFocus = true
+offsetXBox.Parent = bodyFrame
+
+local offsetYBox = Instance.new("TextBox")
+offsetYBox.Size = UDim2.new(0.32, 0, 0, 24)
+offsetYBox.Position = UDim2.new(0.34, 0, 0, 166)
+offsetYBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+offsetYBox.Text = "Y: " .. tostring(offsetY)
+offsetYBox.TextColor3 = Color3.fromRGB(220, 225, 235)
+offsetYBox.TextSize = 11
+offsetYBox.Font = Enum.Font.GothamBold
+offsetYBox.ClearTextOnFocus = true
+offsetYBox.Parent = bodyFrame
+
+local resetBtn = Instance.new("TextButton")
+resetBtn.Size = UDim2.new(0.32, 0, 0, 24)
+resetBtn.Position = UDim2.new(0.68, 0, 0, 166)
+resetBtn.BackgroundColor3 = Color3.fromRGB(58, 63, 76)
+resetBtn.Text = "Сброс"
+resetBtn.TextColor3 = Color3.fromRGB(225, 230, 240)
+resetBtn.TextSize = 11
+resetBtn.Font = Enum.Font.GothamBold
+resetBtn.Parent = bodyFrame
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, 0, 0, 18)
+statusLabel.Position = UDim2.new(0, 0, 0, 194)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Тап по точке — настройки точки"
+statusLabel.TextColor3 = Color3.fromRGB(165, 172, 190)
+statusLabel.TextSize = 11
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.TextTruncate = Enum.TextTruncate.AtEnd
+statusLabel.Parent = bodyFrame
+
+local togetherBtn = Instance.new("TextButton")
+togetherBtn.Name = "TogetherBtn"
+togetherBtn.Size = UDim2.new(0.48, 0, 0, 30)
+togetherBtn.Position = UDim2.new(0, 0, 1, -30)
+togetherBtn.BackgroundColor3 = Color3.fromRGB(55, 125, 215)
+togetherBtn.Text = "Вместе"
+togetherBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+togetherBtn.TextSize = 12
+togetherBtn.Font = Enum.Font.GothamBold
+togetherBtn.Parent = bodyFrame
+
+local separateBtn = Instance.new("TextButton")
+separateBtn.Name = "SeparateBtn"
+separateBtn.Size = UDim2.new(0.48, 0, 0, 30)
+separateBtn.Position = UDim2.new(0.52, 0, 1, -30)
+separateBtn.BackgroundColor3 = Color3.fromRGB(40, 44, 56)
+separateBtn.Text = "Отдельно"
+separateBtn.TextColor3 = Color3.fromRGB(185, 190, 205)
+separateBtn.TextSize = 12
+separateBtn.Font = Enum.Font.GothamBold
+separateBtn.Parent = bodyFrame
+
+-- AutoClicker v5 Max — Часть 2/3 (Окно настроек точки, палитра, круг HSV и RGB/HEX)
+
+local markerPanel = Instance.new("Frame")
+markerPanel.Name = "MarkerSettingsPanel"
+markerPanel.Size = UDim2.new(0, 256, 0, 362)
+markerPanel.Position = UDim2.new(0.5, 146, 0.18, 0)
+markerPanel.BackgroundColor3 = Color3.fromRGB(22, 24, 30)
+markerPanel.BorderSizePixel = 0
+markerPanel.Active = true
+markerPanel.Visible = false
+markerPanel.ZIndex = 30
+markerPanel.Parent = screenGui
+
+local mpCorner = Instance.new("UICorner")
+mpCorner.CornerRadius = UDim.new(0, 8)
+mpCorner.Parent = markerPanel
+
+local mpStroke = Instance.new("UIStroke")
+mpStroke.Color = Color3.fromRGB(75, 85, 110)
+mpStroke.Thickness = 1
+mpStroke.Parent = markerPanel
+
+local mpHeader = Instance.new("Frame")
+mpHeader.Size = UDim2.new(1, 0, 0, 30)
+mpHeader.BackgroundColor3 = Color3.fromRGB(32, 35, 44)
+mpHeader.BorderSizePixel = 0
+mpHeader.Active = true
+mpHeader.ZIndex = 31
+mpHeader.Parent = markerPanel
+
+local mpHeaderCorner = Instance.new("UICorner")
+mpHeaderCorner.CornerRadius = UDim.new(0, 8)
+mpHeaderCorner.Parent = mpHeader
+
+local mpTitle = Instance.new("TextLabel")
+mpTitle.Size = UDim2.new(1, -36, 1, 0)
+mpTitle.Position = UDim2.new(0, 10, 0, 0)
+mpTitle.BackgroundTransparency = 1
+mpTitle.Text = "Точка #1"
+mpTitle.TextColor3 = Color3.fromRGB(235, 238, 245)
+mpTitle.TextSize = 13
+mpTitle.Font = Enum.Font.GothamBold
+mpTitle.TextXAlignment = Enum.TextXAlignment.Left
+mpTitle.ZIndex = 32
+mpTitle.Parent = mpHeader
+
+local mpCloseBtn = Instance.new("TextButton")
+mpCloseBtn.Size = UDim2.new(0, 24, 0, 22)
+mpCloseBtn.Position = UDim2.new(1, -28, 0.5, -11)
+mpCloseBtn.BackgroundColor3 = Color3.fromRGB(165, 48, 56)
+mpCloseBtn.Text = "×"
+mpCloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+mpCloseBtn.TextSize = 15
+mpCloseBtn.Font = Enum.Font.GothamBold
+mpCloseBtn.ZIndex = 32
+mpCloseBtn.Parent = mpHeader
+
+local mpCloseCorner = Instance.new("UICorner")
+mpCloseCorner.CornerRadius = UDim.new(0, 5)
+mpCloseCorner.Parent = mpCloseBtn
+
+local mpBody = Instance.new("Frame")
+mpBody.Size = UDim2.new(1, -16, 1, -38)
+mpBody.Position = UDim2.new(0, 8, 0, 34)
+mpBody.BackgroundTransparency = 1
+mpBody.ZIndex = 31
+mpBody.Parent = markerPanel
+
+local togglePointBtn = Instance.new("TextButton")
+togglePointBtn.Size = UDim2.new(1, 0, 0, 28)
+togglePointBtn.Position = UDim2.new(0, 0, 0, 0)
+togglePointBtn.BackgroundColor3 = Color3.fromRGB(42, 145, 82)
+togglePointBtn.Text = "Точка: ВКЛЮЧЕНА"
+togglePointBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+togglePointBtn.TextSize = 12
+togglePointBtn.Font = Enum.Font.GothamBold
+togglePointBtn.ZIndex = 32
+togglePointBtn.Parent = mpBody
+
+local pointIntLabel = Instance.new("TextLabel")
+pointIntLabel.Size = UDim2.new(0.56, 0, 0, 24)
+pointIntLabel.Position = UDim2.new(0, 0, 0, 34)
+pointIntLabel.BackgroundTransparency = 1
+pointIntLabel.Text = "Интервал точки (мс):"
+pointIntLabel.TextColor3 = Color3.fromRGB(195, 200, 215)
+pointIntLabel.TextSize = 11
+pointIntLabel.Font = Enum.Font.Gotham
+pointIntLabel.TextXAlignment = Enum.TextXAlignment.Left
+pointIntLabel.ZIndex = 32
+pointIntLabel.Parent = mpBody
+
+local pointIntBox = Instance.new("TextBox")
+pointIntBox.Size = UDim2.new(0.42, 0, 0, 24)
+pointIntBox.Position = UDim2.new(0.58, 0, 0, 34)
+pointIntBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+pointIntBox.Text = "100"
+pointIntBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+pointIntBox.TextSize = 12
+pointIntBox.Font = Enum.Font.GothamBold
+pointIntBox.ClearTextOnFocus = false
+pointIntBox.ZIndex = 32
+pointIntBox.Parent = mpBody
+
+local pointLimitLabel = Instance.new("TextLabel")
+pointLimitLabel.Size = UDim2.new(0.56, 0, 0, 24)
+pointLimitLabel.Position = UDim2.new(0, 0, 0, 62)
+pointLimitLabel.BackgroundTransparency = 1
+pointLimitLabel.Text = "Лимит точки (0=∞):"
+pointLimitLabel.TextColor3 = Color3.fromRGB(195, 200, 215)
+pointLimitLabel.TextSize = 11
+pointLimitLabel.Font = Enum.Font.Gotham
+pointLimitLabel.TextXAlignment = Enum.TextXAlignment.Left
+pointLimitLabel.ZIndex = 32
+pointLimitLabel.Parent = mpBody
+
+local pointLimitBox = Instance.new("TextBox")
+pointLimitBox.Size = UDim2.new(0.42, 0, 0, 24)
+pointLimitBox.Position = UDim2.new(0.58, 0, 0, 62)
+pointLimitBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+pointLimitBox.Text = "0"
+pointLimitBox.TextColor3 = Color3.fromRGB(255, 230, 150)
+pointLimitBox.TextSize = 12
+pointLimitBox.Font = Enum.Font.GothamBold
+pointLimitBox.ClearTextOnFocus = false
+pointLimitBox.ZIndex = 32
+pointLimitBox.Parent = mpBody
+
+local basicColorsLabel = Instance.new("TextLabel")
+basicColorsLabel.Size = UDim2.new(1, 0, 0, 18)
+basicColorsLabel.Position = UDim2.new(0, 0, 0, 90)
+basicColorsLabel.BackgroundTransparency = 1
+basicColorsLabel.Text = "Базовые цвета:"
+basicColorsLabel.TextColor3 = Color3.fromRGB(185, 192, 210)
+basicColorsLabel.TextSize = 11
+basicColorsLabel.Font = Enum.Font.Gotham
+basicColorsLabel.TextXAlignment = Enum.TextXAlignment.Left
+basicColorsLabel.ZIndex = 32
+basicColorsLabel.Parent = mpBody
+
+local basicPalette = {
+	Color3.fromRGB(255, 195, 40),
+	Color3.fromRGB(235, 65, 65),
+	Color3.fromRGB(65, 210, 110),
+	Color3.fromRGB(70, 145, 255),
+	Color3.fromRGB(180, 90, 255),
+	Color3.fromRGB(60, 215, 225)
+}
+
+for idx, c in ipairs(basicPalette) do
+	local swatch = Instance.new("TextButton")
+	swatch.Size = UDim2.new(0, 35, 0, 22)
+	swatch.Position = UDim2.new(0, (idx - 1) * 40.5, 0, 110)
+	swatch.BackgroundColor3 = c
+	swatch.Text = ""
+	swatch.ZIndex = 32
+	swatch.Parent = mpBody
+
+	trackConn(swatch.MouseButton1Click:Connect(function()
+		if selectedMarker and applyMarkerColor then
+			applyMarkerColor(selectedMarker, c)
+		end
+	end))
+end
+
+local wheelHolder = Instance.new("Frame")
+wheelHolder.Size = UDim2.new(0, 96, 0, 96)
+wheelHolder.Position = UDim2.new(0, 0, 0, 140)
+wheelHolder.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+wheelHolder.BorderSizePixel = 0
+wheelHolder.ZIndex = 32
+wheelHolder.Parent = mpBody
+
+local wheelCorner = Instance.new("UICorner")
+wheelCorner.CornerRadius = UDim.new(1, 0)
+wheelCorner.Parent = wheelHolder
+
+local wheelGrad = Instance.new("UIGradient")
+wheelGrad.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 0, 0)),
+	ColorSequenceKeypoint.new(0.17, Color3.fromRGB(255, 255, 0)),
+	ColorSequenceKeypoint.new(0.33, Color3.fromRGB(0, 255, 0)),
+	ColorSequenceKeypoint.new(0.50, Color3.fromRGB(0, 255, 255)),
+	ColorSequenceKeypoint.new(0.67, Color3.fromRGB(0, 0, 255)),
+	ColorSequenceKeypoint.new(0.83, Color3.fromRGB(255, 0, 255)),
+	ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 0, 0))
+})
+wheelGrad.Parent = wheelHolder
+
+local wheelKnob = Instance.new("Frame")
+wheelKnob.Size = UDim2.new(0, 10, 0, 10)
+wheelKnob.Position = UDim2.new(0.5, -5, 0.5, -5)
+wheelKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+wheelKnob.BorderSizePixel = 0
+wheelKnob.ZIndex = 34
+wheelKnob.Parent = wheelHolder
+
+local knobCorner = Instance.new("UICorner")
+knobCorner.CornerRadius = UDim.new(1, 0)
+knobCorner.Parent = wheelKnob
+
+local knobStroke = Instance.new("UIStroke")
+knobStroke.Color = Color3.fromRGB(15, 15, 15)
+knobStroke.Thickness = 1.5
+knobStroke.Parent = wheelKnob
+
+local valBar = Instance.new("TextButton")
+valBar.Size = UDim2.new(0, 20, 0, 96)
+valBar.Position = UDim2.new(0, 104, 0, 140)
+valBar.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+valBar.Text = ""
+valBar.ZIndex = 32
+valBar.Parent = mpBody
+
+local vbCorner = Instance.new("UICorner")
+vbCorner.CornerRadius = UDim.new(0, 5)
+vbCorner.Parent = valBar
+
+local vbGrad = Instance.new("UIGradient")
+vbGrad.Rotation = 90
+vbGrad.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(150, 150, 150)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 20, 20))
+})
+vbGrad.Parent = valBar
+
+local rgbTitle = Instance.new("TextLabel")
+rgbTitle.Size = UDim2.new(0, 106, 0, 18)
+rgbTitle.Position = UDim2.new(0, 134, 0, 140)
+rgbTitle.BackgroundTransparency = 1
+rgbTitle.Text = "R / G / B:"
+rgbTitle.TextColor3 = Color3.fromRGB(185, 192, 210)
+rgbTitle.TextSize = 11
+rgbTitle.Font = Enum.Font.Gotham
+rgbTitle.TextXAlignment = Enum.TextXAlignment.Left
+rgbTitle.ZIndex = 32
+rgbTitle.Parent = mpBody
+
+local rBox = Instance.new("TextBox")
+rBox.Size = UDim2.new(0, 32, 0, 22)
+rBox.Position = UDim2.new(0, 134, 0, 160)
+rBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+rBox.Text = "255"
+rBox.TextColor3 = Color3.fromRGB(255, 140, 140)
+rBox.TextSize = 11
+rBox.Font = Enum.Font.GothamBold
+rBox.ClearTextOnFocus = false
+rBox.ZIndex = 32
+rBox.Parent = mpBody
+
+local gBox = Instance.new("TextBox")
+gBox.Size = UDim2.new(0, 32, 0, 22)
+gBox.Position = UDim2.new(0, 170, 0, 160)
+gBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+gBox.Text = "195"
+gBox.TextColor3 = Color3.fromRGB(140, 255, 160)
+gBox.TextSize = 11
+gBox.Font = Enum.Font.GothamBold
+gBox.ClearTextOnFocus = false
+gBox.ZIndex = 32
+gBox.Parent = mpBody
+
+local bBox = Instance.new("TextBox")
+bBox.Size = UDim2.new(0, 32, 0, 22)
+bBox.Position = UDim2.new(0, 206, 0, 160)
+bBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+bBox.Text = "40"
+bBox.TextColor3 = Color3.fromRGB(140, 180, 255)
+bBox.TextSize = 11
+bBox.Font = Enum.Font.GothamBold
+bBox.ClearTextOnFocus = false
+bBox.ZIndex = 32
+bBox.Parent = mpBody
+
+local hexLabel = Instance.new("TextLabel")
+hexLabel.Size = UDim2.new(0, 106, 0, 16)
+hexLabel.Position = UDim2.new(0, 134, 0, 188)
+hexLabel.BackgroundTransparency = 1
+hexLabel.Text = "HEX:"
+hexLabel.TextColor3 = Color3.fromRGB(185, 192, 210)
+hexLabel.TextSize = 11
+hexLabel.Font = Enum.Font.Gotham
+hexLabel.TextXAlignment = Enum.TextXAlignment.Left
+hexLabel.ZIndex = 32
+hexLabel.Parent = mpBody
+
+local hexBox = Instance.new("TextBox")
+hexBox.Size = UDim2.new(0, 104, 0, 24)
+hexBox.Position = UDim2.new(0, 134, 0, 206)
+hexBox.BackgroundColor3 = Color3.fromRGB(36, 40, 50)
+hexBox.Text = "#FFC328"
+hexBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+hexBox.TextSize = 11
+hexBox.Font = Enum.Font.GothamBold
+hexBox.ClearTextOnFocus = false
+hexBox.ZIndex = 32
+hexBox.Parent = mpBody
+
+local currentHue = 0.12
+local currentSat = 0.84
+local currentVal = 1.0
+local syncingColorUI = false
+
+local function refreshMarkerSelectionVisuals()
+	for _, m in ipairs(markers) do
+		if m.stroke and m.stroke.Parent then
+			if m == selectedMarker then
+				m.stroke.Color = Color3.fromRGB(255, 255, 255)
+				m.stroke.Thickness = 3
+			else
+				m.stroke.Color = Color3.fromRGB(25, 28, 35)
+				m.stroke.Thickness = 1.5
+			end
+		end
+	end
+end
+
+local function syncColorPanelFromColor(c)
+	syncingColorUI = true
+	local h, s, v = c:ToHSV()
+	currentHue = h
+	currentSat = math.max(s, 0.05)
+	currentVal = v
+
+	rBox.Text = tostring(math.clamp(math.round(c.R * 255), 0, 255))
+	gBox.Text = tostring(math.clamp(math.round(c.G * 255), 0, 255))
+	bBox.Text = tostring(math.clamp(math.round(c.B * 255), 0, 255))
+	hexBox.Text = rgbToHex(c)
+
+	local angle = h * math.pi * 2
+	local radiusNorm = math.clamp(s, 0, 1) * 0.45
+	wheelKnob.Position = UDim2.new(0.5 + math.cos(angle) * radiusNorm, -5, 0.5 + math.sin(angle) * radiusNorm, -5)
+	syncingColorUI = false
+end
+
+function applyMarkerColor(markerObj, newColor)
+	if not markerObj or not markerObj.frame or not markerObj.frame.Parent then
+		return
+	end
+	markerObj.color = newColor
+	if markerObj.enabled then
+		markerObj.frame.BackgroundColor3 = newColor
+	end
+	if selectedMarker == markerObj then
+		syncColorPanelFromColor(newColor)
+	end
+end
+
+local function refreshMarkerVisualState(markerObj)
+	if not markerObj or not markerObj.frame or not markerObj.frame.Parent then
+		return
+	end
+	if markerObj.enabled then
+		markerObj.frame.BackgroundColor3 = markerObj.color
+		markerObj.frame.BackgroundTransparency = 0.2
+		markerObj.label.TextColor3 = Color3.fromRGB(15, 15, 15)
+	else
+		markerObj.frame.BackgroundColor3 = Color3.fromRGB(90, 95, 108)
+		markerObj.frame.BackgroundTransparency = 0.55
+		markerObj.label.TextColor3 = Color3.fromRGB(220, 220, 220)
+	end
+end
+
+local function openMarkerSettings(markerObj)
+	selectedMarker = markerObj
+	refreshMarkerSelectionVisuals()
+	markerPanel.Visible = true
+	mpTitle.Text = "Настройки точки #" .. tostring(markerObj.index)
+	togglePointBtn.Text = markerObj.enabled and "Точка: ВКЛЮЧЕНА" or "Точка: ВЫКЛЮЧЕНА"
+	togglePointBtn.BackgroundColor3 = markerObj.enabled and Color3.fromRGB(42, 145, 82) or Color3.fromRGB(145, 55, 62)
+	local ms = markerObj.customIntervalSec and math.round(markerObj.customIntervalSec * 1000) or math.round(defaultIntervalSec * 1000)
+	pointIntBox.Text = tostring(ms)
+	pointLimitBox.Text = tostring(markerObj.pointLimit or 0)
+	syncColorPanelFromColor(markerObj.color)
+end
+
+local pickingWheel = false
+local function updateWheelAt(pos2D)
+	local absPos = wheelHolder.AbsolutePosition
+	local absSize = wheelHolder.AbsoluteSize
+	local dx = pos2D.X - (absPos.X + absSize.X * 0.5)
+	local dy = pos2D.Y - (absPos.Y + absSize.Y * 0.5)
+	local dist = math.clamp(math.sqrt(dx * dx + dy * dy) / (absSize.X * 0.5), 0.08, 1)
+	local angle = math.atan2(dy, dx)
+	if angle < 0 then
+		angle += math.pi * 2
+	end
+	currentHue = angle / (math.pi * 2)
+	currentSat = dist
+	if selectedMarker then
+		applyMarkerColor(selectedMarker, Color3.fromHSV(currentHue, currentSat, currentVal))
+	end
+end
+
+trackConn(wheelHolder.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		pickingWheel = true
+		updateWheelAt(input.Position)
+	end
+end))
+
+trackConn(UserInputService.InputChanged:Connect(function(input)
+	if pickingWheel and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		updateWheelAt(input.Position)
+	end
+end))
+
+trackConn(UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		pickingWheel = false
+	end
+end))
+
+trackConn(valBar.MouseButton1Click:Connect(function()
+	currentVal -= 0.2
+	if currentVal < 0.25 then
+		currentVal = 1.0
+	end
+	if selectedMarker then
+		applyMarkerColor(selectedMarker, Color3.fromHSV(currentHue, currentSat, currentVal))
+	end
+end))
+
+local function applyRGBInputs()
+	if syncingColorUI or not selectedMarker then
+		return
+	end
+	local r = tonumber(string.match(rBox.Text or "", "%-?%d+"))
+	local g = tonumber(string.match(gBox.Text or "", "%-?%d+"))
+	local b = tonumber(string.match(bBox.Text or "", "%-?%d+"))
+	if r and g and b then
+		applyMarkerColor(selectedMarker, Color3.fromRGB(math.clamp(math.round(r), 0, 255), math.clamp(math.round(g), 0, 255), math.clamp(math.round(b), 0, 255)))
+	else
+		syncColorPanelFromColor(selectedMarker.color)
+	end
+end
+
+trackConn(rBox.FocusLost:Connect(applyRGBInputs))
+trackConn(gBox.FocusLost:Connect(applyRGBInputs))
+trackConn(bBox.FocusLost:Connect(applyRGBInputs))
+
+trackConn(hexBox.FocusLost:Connect(function()
+	if syncingColorUI or not selectedMarker then
+		return
+	end
+	local parsed = hexToColor3(hexBox.Text)
+	if parsed then
+		applyMarkerColor(selectedMarker, parsed)
+	else
+		hexBox.Text = rgbToHex(selectedMarker.color)
+	end
+end))
+
+trackConn(togglePointBtn.MouseButton1Click:Connect(function()
+	if not selectedMarker then
+		return
+	end
+	selectedMarker.enabled = not selectedMarker.enabled
+	refreshMarkerVisualState(selectedMarker)
+	openMarkerSettings(selectedMarker)
+end))
+
+trackConn(pointIntBox.FocusLost:Connect(function()
+	if not selectedMarker then
+		return
+	end
+	local num = tonumber(pointIntBox.Text)
+	if num then
+		num = math.clamp(num, 15, 60000)
+		selectedMarker.customIntervalSec = num / 1000
+		pointIntBox.Text = tostring(math.round(num))
+	else
+		local fallback = selectedMarker.customIntervalSec and math.round(selectedMarker.customIntervalSec * 1000) or math.round(defaultIntervalSec * 1000)
+		pointIntBox.Text = tostring(fallback)
+	end
+end))
+
+trackConn(pointLimitBox.FocusLost:Connect(function()
+	if not selectedMarker then
+		return
+	end
+	local num = tonumber(pointLimitBox.Text)
+	if num then
+		selectedMarker.pointLimit = math.clamp(math.round(num), 0, 1000000)
+		pointLimitBox.Text = tostring(selectedMarker.pointLimit)
+	else
+		pointLimitBox.Text = tostring(selectedMarker.pointLimit or 0)
+	end
+end))
+
+trackConn(mpCloseBtn.MouseButton1Click:Connect(function()
+	markerPanel.Visible = false
+	selectedMarker = nil
+	refreshMarkerSelectionVisuals()
+end))
+
+-- AutoClicker v5 Max — Часть 3/3 (Маркеры, клики, горячие клавиши, события и цикл)
+
+local waitingHotkey = false
+
+local function updateCounterTitle()
+	local limitPart = clickLimit > 0 and ("/" .. tostring(clickLimit)) or ""
+	titleLabel.Text = isRunning
+		and string.format("AC v5 [%d%s]", clickCount, limitPart)
+		or string.format("AC v5 (%d%s)", clickCount, limitPart)
+end
+
+local function refreshMarkerLabels()
+	for i, item in ipairs(markers) do
+		item.index = i
+		if item.label then
+			item.label.Text = tostring(i)
+		end
+		if selectedMarker == item and markerPanel.Visible then
+			mpTitle.Text = "Настройки точки #" .. tostring(i)
+		end
+	end
+end
+
+local function pulseMarker(markerObj)
+	local holder = markerObj and markerObj.frame
+	if not holder or not holder.Parent or not markerObj.enabled then
+		return
+	end
+	pcall(function()
+		local origColor = markerObj.color
+		holder.BackgroundColor3 = Color3.fromRGB(90, 250, 145)
+		TweenService:Create(holder, TweenInfo.new(0.12), { BackgroundColor3 = origColor }):Play()
+	end)
+end
+
+local function clearAllMarkers()
+	selectedMarker = nil
+	markerPanel.Visible = false
+	for _, m in ipairs(markers) do
+		if m.frame and m.frame.Parent then
+			m.frame:Destroy()
+		end
+	end
+	table.clear(markers)
+	statusLabel.Text = "Все точки удалены"
+end
+
+local function addMarker()
+	local index = #markers + 1
+	local markerSize = 36
+	local initColor = Color3.fromRGB(255, 195, 40)
+
+	local holder = Instance.new("Frame")
+	holder.Name = "Marker_" .. tostring(index)
+	holder.Size = UDim2.new(0, markerSize, 0, markerSize)
+	holder.Position = UDim2.new(0.5, -markerSize / 2 + (index - 1) * 14, 0.55, -markerSize / 2)
+	holder.BackgroundColor3 = initColor
+	holder.BackgroundTransparency = 0.2
+	holder.BorderSizePixel = 0
+	holder.ZIndex = 50
+	holder.Parent = markersFolder
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(1, 0)
+	corner.Parent = holder
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(25, 28, 35)
+	stroke.Thickness = 1.5
+	stroke.Parent = holder
+
+	local dragBtn = Instance.new("TextButton")
+	dragBtn.Size = UDim2.new(1, 0, 1, 0)
+	dragBtn.BackgroundTransparency = 1
+	dragBtn.Text = tostring(index)
+	dragBtn.TextColor3 = Color3.fromRGB(15, 15, 15)
+	dragBtn.TextSize = 14
+	dragBtn.Font = Enum.Font.GothamBlack
+	dragBtn.ZIndex = 51
+	dragBtn.Parent = holder
+
+	local delBtn = Instance.new("TextButton")
+	delBtn.Size = UDim2.new(0, 16, 0, 16)
+	delBtn.Position = UDim2.new(1, -4, 0, -4)
+	delBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+	delBtn.Text = "×"
+	delBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	delBtn.TextSize = 11
+	delBtn.Font = Enum.Font.GothamBold
+	delBtn.ZIndex = 52
+	delBtn.Parent = holder
+
+	local delCorner = Instance.new("UICorner")
+	delCorner.CornerRadius = UDim.new(1, 0)
+	delCorner.Parent = delBtn
+
+	local entry = {
+		index = index,
+		frame = holder,
+		dragBtn = dragBtn,
+		label = dragBtn,
+		stroke = stroke,
+		delBtn = delBtn,
+		enabled = true,
+		color = initColor,
+		customIntervalSec = nil,
+		pointLimit = 0,
+		pointClicks = 0,
+		lastClickClock = 0
+	}
+	table.insert(markers, entry)
+
+	makeDraggableOrClickable(dragBtn, holder, function()
+		openMarkerSettings(entry)
+	end)
+
+	trackConn(delBtn.MouseButton1Click:Connect(function()
+		if selectedMarker == entry then
+			selectedMarker = nil
+			markerPanel.Visible = false
+		end
+		for i, item in ipairs(markers) do
+			if item == entry then
+				table.remove(markers, i)
+				break
+			end
+		end
+		holder:Destroy()
+		refreshMarkerLabels()
+	end))
+end
+
+local function setMinimizedState(minimized)
+	isMinimized = minimized
+	mainFrame.Visible = not isMinimized
+	miniPill.Visible = isMinimized
+	if isMinimized then
+		miniPill.Position = mainFrame.Position
+	else
+		mainFrame.Position = miniPill.Position
+	end
+end
+
+local function setRunningState(state)
+	if state == isRunning then
+		return
+	end
+	runToken += 1
+	local currentToken = runToken
+
+	if state then
+		if clickLimit > 0 and clickCount >= clickLimit then
+			clickCount = 0
+		end
+		if startDelaySec > 0 then
+			statusLabel.Text = string.format("Старт через %.1f сек...", startDelaySec)
+			task.delay(startDelaySec, function()
+				if destroyed or runToken ~= currentToken then
+					return
+				end
+				isRunning = true
+				local now = os.clock()
+				for _, m in ipairs(markers) do
+					m.lastClickClock = now - 999
+				end
+				if autoMinimizeOnStart then
+					setMinimizedState(true)
+				end
+				startBtn.Text = "Стоп"
+				startBtn.BackgroundColor3 = Color3.fromRGB(185, 52, 60)
+				miniPill.Text = "AC v5 [РАБОТАЕТ]"
+				miniPill.TextColor3 = Color3.fromRGB(120, 240, 145)
+				updateCounterTitle()
+				statusLabel.Text = "Кликер запущен"
+			end)
+			return
+		end
+
+		isRunning = true
+		local now = os.clock()
+		for _, m in ipairs(markers) do
+			m.lastClickClock = now - 999
+		end
+		if autoMinimizeOnStart then
+			setMinimizedState(true)
+		end
+		startBtn.Text = "Стоп"
+		startBtn.BackgroundColor3 = Color3.fromRGB(185, 52, 60)
+		miniPill.Text = "AC v5 [РАБОТАЕТ]"
+		miniPill.TextColor3 = Color3.fromRGB(120, 240, 145)
+		updateCounterTitle()
+		statusLabel.Text = "Кликер запущен"
+	else
+		isRunning = false
+		startBtn.Text = "Начать"
+		startBtn.BackgroundColor3 = Color3.fromRGB(42, 145, 82)
+		miniPill.Text = "AC v5 [Открыть]"
+		miniPill.TextColor3 = Color3.fromRGB(220, 225, 235)
+		updateCounterTitle()
+		statusLabel.Text = "Остановлено"
+	end
+end
+
+local function executeMarkerClick(markerObj)
+	if not markerObj or not markerObj.enabled or not markerObj.frame or not markerObj.frame.Parent then
+		return false
+	end
+	if clickLimit > 0 and clickCount >= clickLimit then
+		setRunningState(false)
+		statusLabel.Text = "Достигнут общий лимит кликов"
+		return false
+	end
+	if markerObj.pointLimit and markerObj.pointLimit > 0 and (markerObj.pointClicks or 0) >= markerObj.pointLimit then
+		return false
+	end
+
+	local pos = markerObj.frame.AbsolutePosition
+	local size = markerObj.frame.AbsoluteSize
+	local insetY = 0
+	if useTopInsetFix then
+		pcall(function()
+			insetY = GuiService:GetGuiInset().Y
+		end)
+	end
+
+	local rndX = jitterPx > 0 and math.random(-jitterPx, jitterPx) or 0
+	local rndY = jitterPx > 0 and math.random(-jitterPx, jitterPx) or 0
+	local finalX = math.round(pos.X + size.X * 0.5 + offsetX + rndX)
+	local finalY = math.round(pos.Y + size.Y * 0.5 - insetY + offsetY + rndY)
+
+	clickCount += 1
+	markerObj.pointClicks = (markerObj.pointClicks or 0) + 1
+	markerObj.lastClickClock = os.clock()
+	updateCounterTitle()
+	pulseMarker(markerObj)
+
+	pcall(function()
+		VirtualInputManager:SendMouseButtonEvent(finalX, finalY, 0, true, game, 1)
+		task.wait(math.max(0.005, holdSec))
+		VirtualInputManager:SendMouseButtonEvent(finalX, finalY, 0, false, game, 1)
+	end)
+
+	if clickLimit > 0 and clickCount >= clickLimit then
+		setRunningState(false)
+		statusLabel.Text = "Лимит кликов выполнен"
+	end
+	return true
+end
+
+local function getRandomizedInterval(baseSec)
+	if jitterMs <= 0 then
+		return baseSec
+	end
+	local deltaSec = math.random(-jitterMs, jitterMs) / 1000
+	return math.max(0.01, baseSec + deltaSec)
+end
+
+local function setRunMode(newMode)
+	runMode = newMode
+	local isTog = (runMode == "TOGETHER")
+	togetherBtn.BackgroundColor3 = isTog and Color3.fromRGB(55, 125, 215) or Color3.fromRGB(40, 44, 56)
+	togetherBtn.TextColor3 = isTog and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(185, 190, 205)
+	separateBtn.BackgroundColor3 = (not isTog) and Color3.fromRGB(55, 125, 215) or Color3.fromRGB(40, 44, 56)
+	separateBtn.TextColor3 = (not isTog) and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(185, 190, 205)
+	statusLabel.Text = isTog and "Режим: Вместе (очередь 1→2→...)" or "Режим: Отдельно (свой интервал)"
+end
+
+makeDraggableOrClickable(topBar, mainFrame)
+makeDraggableOrClickable(miniPill, miniPill)
+makeDraggableOrClickable(mpHeader, markerPanel)
+
+trackConn(addBtn.MouseButton1Click:Connect(function() addMarker() end))
+trackConn(clearAllBtn.MouseButton1Click:Connect(function() clearAllMarkers() end))
+trackConn(startBtn.MouseButton1Click:Connect(function() setRunningState(not isRunning) end))
+trackConn(minBtn.MouseButton1Click:Connect(function() setMinimizedState(true) end))
+trackConn(miniPill.MouseButton1Click:Connect(function() setMinimizedState(false) end))
+trackConn(closeBtn.MouseButton1Click:Connect(function() cleanupAll() end))
+trackConn(togetherBtn.MouseButton1Click:Connect(function() setRunMode("TOGETHER") end))
+trackConn(separateBtn.MouseButton1Click:Connect(function() setRunMode("SEPARATE") end))
+
+trackConn(resetCountBtn.MouseButton1Click:Connect(function()
+	clickCount = 0
+	for _, m in ipairs(markers) do
+		m.pointClicks = 0
+	end
+	updateCounterTitle()
+	statusLabel.Text = "Счётчик обнулён"
+end))
+
+trackConn(insetBtn.MouseButton1Click:Connect(function()
+	useTopInsetFix = not useTopInsetFix
+	insetBtn.Text = useTopInsetFix and "Inset: ВКЛ" or "Inset: ВЫКЛ"
+	insetBtn.BackgroundColor3 = useTopInsetFix and Color3.fromRGB(48, 120, 185) or Color3.fromRGB(55, 62, 78)
+end))
+
+trackConn(autoMinBtn.MouseButton1Click:Connect(function()
+	autoMinimizeOnStart = not autoMinimizeOnStart
+	autoMinBtn.Text = autoMinimizeOnStart and "Авто-сворот: ДА" or "Авто-сворот: НЕТ"
+	autoMinBtn.BackgroundColor3 = autoMinimizeOnStart and Color3.fromRGB(48, 120, 185) or Color3.fromRGB(55, 62, 78)
+end))
+
+trackConn(hotkeyBtn.MouseButton1Click:Connect(function()
+	waitingHotkey = true
+	hotkeyBtn.Text = "Нажми..."
+	hotkeyBtn.BackgroundColor3 = Color3.fromRGB(175, 125, 35)
+end))
+
+trackConn(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then
+		return
+	end
+	if waitingHotkey and input.UserInputType == Enum.UserInputType.Keyboard then
+		waitingHotkey = false
+		hotkeyCode = input.KeyCode
+		hotkeyBtn.Text = "Key: " .. tostring(hotkeyCode.Name)
+		hotkeyBtn.BackgroundColor3 = Color3.fromRGB(55, 62, 78)
+		statusLabel.Text = "Клавиша старт/стоп: " .. tostring(hotkeyCode.Name)
+		return
+	end
+	if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == hotkeyCode then
+		setRunningState(not isRunning)
+	end
+end))
+
+trackConn(resetBtn.MouseButton1Click:Connect(function()
+	offsetX = DEFAULT_OFFSET_X
+	offsetY = DEFAULT_OFFSET_Y
+	defaultIntervalSec = DEFAULT_INTERVAL_MS / 1000
+	holdSec = DEFAULT_HOLD_MS / 1000
+	jitterMs = 0
+	jitterPx = 0
+	startDelaySec = 0
+	clickLimit = 0
+	offsetXBox.Text = "X: " .. tostring(offsetX)
+	offsetYBox.Text = "Y: " .. tostring(offsetY)
+	intervalBox.Text = tostring(DEFAULT_INTERVAL_MS)
+	holdBox.Text = tostring(DEFAULT_HOLD_MS)
+	jitterMsBox.Text = "0"
+	jitterPxBox.Text = "0"
+	delayBox.Text = "0"
+	limitBox.Text = "0"
+	updateCounterTitle()
+	statusLabel.Text = "Настройки сброшены (X:35, Y:105)"
+end))
+
+trackConn(intervalBox.FocusLost:Connect(function()
+	local num = tonumber(intervalBox.Text)
+	if num then
+		num = math.clamp(num, 15, 60000)
+		defaultIntervalSec = num / 1000
+		intervalBox.Text = tostring(math.round(num))
+	else
+		intervalBox.Text = tostring(math.round(defaultIntervalSec * 1000))
+	end
+end))
+
+trackConn(holdBox.FocusLost:Connect(function()
+	local num = tonumber(holdBox.Text)
+	if num then
+		num = math.clamp(num, 5, 2000)
+		holdSec = num / 1000
+		holdBox.Text = tostring(math.round(num))
+	else
+		holdBox.Text = tostring(math.round(holdSec * 1000))
+	end
+end))
+
+trackConn(limitBox.FocusLost:Connect(function()
+	local num = tonumber(limitBox.Text)
+	if num then
+		clickLimit = math.clamp(math.round(num), 0, 1000000)
+		limitBox.Text = tostring(clickLimit)
+		updateCounterTitle()
+	else
+		limitBox.Text = tostring(clickLimit)
+	end
+end))
+
+trackConn(jitterMsBox.FocusLost:Connect(function()
+	local num = tonumber(jitterMsBox.Text)
+	if num then
+		jitterMs = math.clamp(math.round(num), 0, 5000)
+		jitterMsBox.Text = tostring(jitterMs)
+	else
+		jitterMsBox.Text = tostring(jitterMs)
+	end
+end))
+
+trackConn(jitterPxBox.FocusLost:Connect(function()
+	local num = tonumber(jitterPxBox.Text)
+	if num then
+		jitterPx = math.clamp(math.round(num), 0, 100)
+		jitterPxBox.Text = tostring(jitterPx)
+	else
+		jitterPxBox.Text = tostring(jitterPx)
+	end
+end))
+
+trackConn(delayBox.FocusLost:Connect(function()
+	local num = tonumber(delayBox.Text)
+	if num then
+		startDelaySec = math.clamp(num, 0, 120)
+		delayBox.Text = tostring(startDelaySec)
+	else
+		delayBox.Text = tostring(startDelaySec)
+	end
+end))
+
+local function parseOffsetText(txt, prefix)
+	local val = tonumber(string.gsub(txt or "", "[^%d%-]", ""))
+	if val then
+		val = math.clamp(math.round(val), -300, 300)
+		return val, prefix .. ": " .. tostring(val)
+	end
+	return nil, nil
+end
+
+trackConn(offsetXBox.FocusLost:Connect(function()
+	local val, formatted = parseOffsetText(offsetXBox.Text, "X")
+	if val then offsetX = val; offsetXBox.Text = formatted else offsetXBox.Text = "X: " .. tostring(offsetX) end
+end))
+
+trackConn(offsetYBox.FocusLost:Connect(function()
+	local val, formatted = parseOffsetText(offsetYBox.Text, "Y")
+	if val then offsetY = val; offsetYBox.Text = formatted else offsetYBox.Text = "Y: " .. tostring(offsetY) end
+end))
+
+task.spawn(function()
+	while not destroyed do
+		if isRunning and #markers > 0 then
+			if runMode == "TOGETHER" then
+				for i = 1, #markers do
+					if not isRunning or destroyed or runMode ~= "TOGETHER" then break end
+					local item = markers[i]
+					if item and item.enabled then
+						local clicked = executeMarkerClick(item)
+						if clicked then
+							local baseSec = item.customIntervalSec or defaultIntervalSec
+							task.wait(getRandomizedInterval(baseSec))
+						end
+					end
+				end
+				task.wait(0.01)
+			else
+				local now, clickedAny = os.clock(), false
+				for i = 1, #markers do
+					if not isRunning or destroyed or runMode ~= "SEPARATE" then break end
+					local item = markers[i]
+					if item and item.enabled then
+						local interval = item.customIntervalSec or defaultIntervalSec
+						if (now - item.lastClickClock) >= interval then
+							if executeMarkerClick(item) then
+								clickedAny = true
+							end
+						end
+					end
+				end
+				task.wait(clickedAny and 0.01 or 0.02)
+			end
+		else
+			task.wait(0.05)
+		end
+	end
+end)
+
+addMarker()
