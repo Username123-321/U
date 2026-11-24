@@ -1,0 +1,1872 @@
+
+--[[
+    AUTO CLICKER ULTRA PRO v11
+    Part 1/3 — Core, GUI and UI helpers
+    Roblox client-side script
+]]
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local GuiService = game:GetService("GuiService")
+local HttpService = game:GetService("HttpService")
+
+local Player = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
+
+local VERSION = "11.0"
+local GUI_NAME = "AutoClickerUltraPro_v11"
+
+-- Cleanup previous instance
+local ENV = getgenv and getgenv() or _G
+local CLEANUP_KEY = "__AC_ULTRA_PRO_CLEANUP"
+
+if ENV[CLEANUP_KEY] then
+    pcall(ENV[CLEANUP_KEY])
+end
+
+local State = {
+    Running = false,
+    Destroyed = false,
+    Minimized = false,
+
+    ClickCount = 0,
+    RunToken = 0,
+
+    Interval = 0.1,
+    HoldTime = 0.015,
+    StartDelay = 0,
+    AutoStop = 0,
+    ClickLimit = 0,
+
+    CycleGap = 0,
+    JitterMs = 0,
+    JitterPx = 0,
+
+    OffsetX = 35,
+    OffsetY = 105,
+
+    MarkerSize = 36,
+    RunMode = "TOGETHER",
+    ActionMode = "CLICK",
+
+    Turbo = false,
+    Pulse = true,
+    AutoMinimize = false,
+    UseInset = false,
+
+    Theme = "DARK",
+
+    Hotkeys = {
+        Toggle = Enum.KeyCode.F6,
+        Add = Enum.KeyCode.F7,
+        Hide = Enum.KeyCode.F8
+    },
+
+    Markers = {},
+    SelectedMarker = nil,
+    Connections = {},
+    ConfigSlots = {},
+    WaitingHotkey = nil
+}
+
+local Themes = {
+    DARK = {
+        Name = "Тёмная стеклянная",
+        Background = Color3.fromRGB(20, 23, 31),
+        Header = Color3.fromRGB(30, 36, 49),
+        Card = Color3.fromRGB(38, 44, 59),
+        Stroke = Color3.fromRGB(85, 100, 130),
+        Text = Color3.fromRGB(245, 247, 255),
+        SubText = Color3.fromRGB(175, 185, 205)
+    },
+
+    BLUE = {
+        Name = "Неоновая синяя",
+        Background = Color3.fromRGB(13, 20, 37),
+        Header = Color3.fromRGB(20, 34, 59),
+        Card = Color3.fromRGB(26, 43, 72),
+        Stroke = Color3.fromRGB(55, 155, 255),
+        Text = Color3.fromRGB(235, 247, 255),
+        SubText = Color3.fromRGB(150, 195, 240)
+    },
+
+    GREEN = {
+        Name = "Изумрудная",
+        Background = Color3.fromRGB(16, 29, 25),
+        Header = Color3.fromRGB(23, 43, 36),
+        Card = Color3.fromRGB(30, 54, 44),
+        Stroke = Color3.fromRGB(65, 190, 130),
+        Text = Color3.fromRGB(235, 250, 240),
+        SubText = Color3.fromRGB(160, 210, 185)
+    }
+}
+
+local function Track(connection)
+    table.insert(State.Connections, connection)
+    return connection
+end
+
+local function DisconnectAll()
+    for _, connection in ipairs(State.Connections) do
+        pcall(function()
+            connection:Disconnect()
+        end)
+    end
+
+    table.clear(State.Connections)
+end
+
+local function Tween(object, properties, duration)
+    if not object or not object.Parent then
+        return
+    end
+
+    local success, tween = pcall(function()
+        return TweenService:Create(
+            object,
+            TweenInfo.new(
+                duration or 0.16,
+                Enum.EasingStyle.Quad,
+                Enum.EasingDirection.Out
+            ),
+            properties
+        )
+    end)
+
+    if success and tween then
+        tween:Play()
+    end
+end
+
+local function New(className, properties, parent)
+    local object = Instance.new(className)
+
+    for property, value in pairs(properties or {}) do
+        pcall(function()
+            object[property] = value
+        end)
+    end
+
+    object.Parent = parent
+    return object
+end
+
+local function Round(object, radius)
+    New("UICorner", {
+        CornerRadius = UDim.new(0, radius or 8)
+    }, object)
+end
+
+local function Stroke(object, color, thickness)
+    return New("UIStroke", {
+        Color = color or Color3.new(1, 1, 1),
+        Thickness = thickness or 1
+    }, object)
+end
+
+local function ConnectButton(button, callback)
+    return Track(button.Activated:Connect(function()
+        if State.Destroyed then
+            return
+        end
+
+        local success, err = pcall(callback)
+
+        if not success then
+            warn("[AC v11] Button error:", err)
+        end
+    end))
+end
+
+local function SetStatus(message)
+    if State.Destroyed then
+        return
+    end
+
+    if StatusLabel and StatusLabel.Parent then
+        StatusLabel.Text = tostring(message)
+    end
+end
+
+local oldGui = PlayerGui:FindFirstChild(GUI_NAME)
+if oldGui then
+    oldGui:Destroy()
+end
+
+local Screen = New("ScreenGui", {
+    Name = GUI_NAME,
+    ResetOnSpawn = false,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    DisplayOrder = 999
+}, PlayerGui)
+
+pcall(function()
+    Screen.IgnoreGuiInset = true
+end)
+
+local MarkerFolder = New("Folder", {
+    Name = "Markers"
+}, Screen)
+
+local Main = New("Frame", {
+    Name = "Main",
+    Size = UDim2.fromOffset(330, 410),
+    Position = UDim2.new(0.5, -165, 0.15, 0),
+    BackgroundColor3 = Themes.DARK.Background,
+    BorderSizePixel = 0,
+    Active = true
+}, Screen)
+
+Round(Main, 12)
+local MainStroke = Stroke(Main, Themes.DARK.Stroke, 1.3)
+
+local Header = New("Frame", {
+    Name = "Header",
+    Size = UDim2.new(1, 0, 0, 40),
+    BackgroundColor3 = Themes.DARK.Header,
+    BorderSizePixel = 0,
+    Active = true
+}, Main)
+
+Round(Header, 12)
+
+local Title = New("TextLabel", {
+    Size = UDim2.new(1, -100, 1, 0),
+    Position = UDim2.fromOffset(12, 0),
+    BackgroundTransparency = 1,
+    Text = "AUTO CLICKER v11",
+    TextColor3 = Themes.DARK.Text,
+    Font = Enum.Font.GothamBold,
+    TextSize = 13,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, Header)
+
+local MinimizeButton = New("TextButton", {
+    Size = UDim2.fromOffset(30, 26),
+    Position = UDim2.new(1, -72, 0.5, -13),
+    Text = "−",
+    TextSize = 18,
+    Font = Enum.Font.GothamBold,
+    BackgroundColor3 = Color3.fromRGB(60, 70, 90),
+    TextColor3 = Color3.new(1, 1, 1)
+}, Header)
+
+Round(MinimizeButton, 6)
+
+local CloseButton = New("TextButton", {
+    Size = UDim2.fromOffset(30, 26),
+    Position = UDim2.new(1, -36, 0.5, -13),
+    Text = "×",
+    TextSize = 18,
+    Font = Enum.Font.GothamBold,
+    BackgroundColor3 = Color3.fromRGB(180, 55, 65),
+    TextColor3 = Color3.new(1, 1, 1)
+}, Header)
+
+Round(CloseButton, 6)
+
+local MiniButton = New("TextButton", {
+    Size = UDim2.fromOffset(185, 36),
+    Position = UDim2.new(0.5, -92, 0.12, 0),
+    Text = "AC v11 | Открыть",
+    TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 12,
+    Font = Enum.Font.GothamBold,
+    BackgroundColor3 = Themes.DARK.Header,
+    Visible = false
+}, Screen)
+
+Round(MiniButton, 9)
+Stroke(MiniButton, Themes.DARK.Stroke, 1.2)
+
+local TabBar = New("Frame", {
+    Size = UDim2.new(1, -16, 0, 32),
+    Position = UDim2.fromOffset(8, 47),
+    BackgroundColor3 = Themes.DARK.Card,
+    BorderSizePixel = 0
+}, Main)
+
+Round(TabBar, 7)
+
+local TabButtons = {}
+local TabFrames = {}
+
+local function MakeTab(name, text, position, width)
+    local button = New("TextButton", {
+        Size = UDim2.new(width, -4, 1, -4),
+        Position = UDim2.new(position, 2, 0, 2),
+        Text = text,
+        TextColor3 = Themes.DARK.SubText,
+        TextSize = 11,
+        Font = Enum.Font.GothamBold,
+        BackgroundColor3 = Themes.DARK.Card
+    }, TabBar)
+
+    Round(button, 5)
+    TabButtons[name] = button
+
+    local frame = New("ScrollingFrame", {
+        Name = name,
+        Size = UDim2.new(1, -16, 1, -115),
+        Position = UDim2.fromOffset(8, 87),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 3,
+        CanvasSize = UDim2.fromOffset(0, 500),
+        Visible = false
+    }, Main)
+
+    TabFrames[name] = frame
+
+    return button, frame
+end
+
+local BothButton, BothTab =
+    MakeTab("BOTH", "ОБА", 0, 0.24)
+
+local MobileButton, MobileTab =
+    MakeTab("MOBILE", "ТЕЛЕФОН", 0.24, 0.26)
+
+local PCButton, PCTab =
+    MakeTab("PC", "ПК", 0.50, 0.20)
+
+local ConfigButton, ConfigTab =
+    MakeTab("CONFIG", "КОНФИГ", 0.70, 0.30)
+
+local StatusLabel = New("TextLabel", {
+    Size = UDim2.new(1, -16, 0, 20),
+    Position = UDim2.new(0, 8, 1, -25),
+    BackgroundTransparency = 1,
+    Text = "Готов к работе",
+    TextColor3 = Themes.DARK.SubText,
+    TextSize = 10,
+    Font = Enum.Font.Gotham,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, Main)
+
+local function MakeButton(parent, text, x, y, width, color)
+    local button = New("TextButton", {
+        Size = UDim2.new(width, -4, 0, 30),
+        Position = UDim2.new(x, 2, 0, y),
+        Text = text,
+        TextColor3 = Color3.new(1, 1, 1),
+        TextSize = 11,
+        Font = Enum.Font.GothamBold,
+        BackgroundColor3 = color or Color3.fromRGB(55, 100, 175)
+    }, parent)
+
+    Round(button, 6)
+    return button
+end
+
+local function MakeLabel(parent, text, y)
+    return New("TextLabel", {
+        Size = UDim2.new(0.55, 0, 0, 24),
+        Position = UDim2.fromOffset(2, y),
+        BackgroundTransparency = 1,
+        Text = text,
+        TextColor3 = Themes.DARK.SubText,
+        TextSize = 11,
+        Font = Enum.Font.Gotham,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, parent)
+end
+
+local function MakeInput(parent, value, x, y, width)
+    local input = New("TextBox", {
+        Size = UDim2.new(width, -4, 0, 25),
+        Position = UDim2.new(x, 2, 0, y),
+        BackgroundColor3 = Color3.fromRGB(40, 46, 60),
+        TextColor3 = Themes.DARK.Text,
+        TextSize = 11,
+        Font = Enum.Font.GothamBold,
+        Text = tostring(value),
+        ClearTextOnFocus = false
+    }, parent)
+
+    Round(input, 5)
+    return input
+end
+
+local function SetTab(name)
+    for tabName, frame in pairs(TabFrames) do
+        frame.Visible = tabName == name
+
+        local button = TabButtons[tabName]
+
+        button.BackgroundColor3 =
+            tabName == name
+            and Color3.fromRGB(55, 120, 210)
+            or Themes.DARK.Card
+
+        button.TextColor3 =
+            tabName == name
+            and Color3.new(1, 1, 1)
+            or Themes.DARK.SubText
+    end
+
+    SetStatus("Вкладка: " .. name)
+end
+
+local function SetTheme(name)
+    local theme = Themes[name]
+
+    if not theme then
+        return
+    end
+
+    State.Theme = name
+
+    Tween(Main, {
+        BackgroundColor3 = theme.Background
+    })
+
+    Tween(Header, {
+        BackgroundColor3 = theme.Header
+    })
+
+    MainStroke.Color = theme.Stroke
+    Title.TextColor3 = theme.Text
+
+    SetStatus("Тема: " .. theme.Name)
+end
+
+local function SetMinimized(value)
+    State.Minimized = value
+
+    if value then
+        MiniButton.Position = Main.Position
+        MiniButton.Visible = true
+        Main.Visible = false
+    else
+        Main.Position = MiniButton.Position
+        Main.Visible = true
+        MiniButton.Visible = false
+    end
+end
+
+-- Part 2 continues below.
+
+
+--[[
+    AUTO CLICKER ULTRA PRO v11
+    Part 2/3 — Click settings, markers, controls
+]]
+
+-- ==========================================
+-- 1. BOTH TAB
+-- ==========================================
+
+local BothTitle = MakeLabel(BothTab, "ОСНОВНЫЕ НАСТРОЙКИ", 0)
+BothTitle.Size = UDim2.new(1, 0, 0, 24)
+
+local StartButton = MakeButton(
+    BothTab, "▶ ЗАПУСТИТЬ", 0, 32, 0.5,
+    Color3.fromRGB(35, 155, 95)
+)
+
+local StopButton = MakeButton(
+    BothTab, "■ ОСТАНОВИТЬ", 0.5, 32, 0.5,
+    Color3.fromRGB(180, 55, 65)
+)
+
+local SpeedLabel = MakeLabel(
+    BothTab, "Интервал (секунды)", 75
+)
+
+local SpeedInput = MakeInput(
+    BothTab, State.Interval, 0.65, 75, 0.35
+)
+
+local HoldLabel = MakeLabel(
+    BothTab, "Удержание (секунды)", 110
+)
+
+local HoldInput = MakeInput(
+    BothTab, State.HoldTime, 0.65, 110, 0.35
+)
+
+local DelayLabel = MakeLabel(
+    BothTab, "Задержка старта", 145
+)
+
+local DelayInput = MakeInput(
+    BothTab, State.StartDelay, 0.65, 145, 0.35
+)
+
+local LimitLabel = MakeLabel(
+    BothTab, "Лимит кликов (0 = безлимит)", 180
+)
+
+local LimitInput = MakeInput(
+    BothTab, State.ClickLimit, 0.65, 180, 0.35
+)
+
+local ModeButton = MakeButton(
+    BothTab, "РЕЖИМ: ВСЕ ТОЧКИ", 0, 220, 1
+)
+
+local ActionButton = MakeButton(
+    BothTab, "ДЕЙСТВИЕ: КЛИК", 0, 255, 1
+)
+
+local AddPointButton = MakeButton(
+    BothTab, "+ ДОБАВИТЬ ТОЧКУ", 0, 290, 0.5
+)
+
+local RemovePointButton = MakeButton(
+    BothTab, "− УДАЛИТЬ ТОЧКУ", 0.5, 290, 0.5,
+    Color3.fromRGB(160, 70, 70)
+)
+
+-- ==========================================
+-- 2. MOBILE TAB
+-- ==========================================
+
+MakeLabel(
+    MobileTab,
+    "МОБИЛЬНОЕ УПРАВЛЕНИЕ",
+    0
+)
+
+local MobileInfo = New("TextLabel", {
+    Size = UDim2.new(1, -4, 0, 50),
+    Position = UDim2.fromOffset(2, 25),
+    BackgroundTransparency = 1,
+    Text = "Используй кнопки ниже для управления точками. Перетаскивай точки пальцем.",
+    TextColor3 = Themes.DARK.SubText,
+    TextSize = 11,
+    TextWrapped = true,
+    Font = Enum.Font.Gotham
+}, MobileTab)
+
+local MobileAddButton = MakeButton(
+    MobileTab, "+ НОВАЯ ТОЧКА", 0, 85, 1
+)
+
+local MobileStartButton = MakeButton(
+    MobileTab, "▶ НАЧАТЬ", 0, 120, 0.5,
+    Color3.fromRGB(35, 155, 95)
+)
+
+local MobileStopButton = MakeButton(
+    MobileTab, "■ СТОП", 0.5, 120, 0.5,
+    Color3.fromRGB(180, 55, 65)
+)
+
+local MarkerSizeLabel = MakeLabel(
+    MobileTab, "Размер точек", 165
+)
+
+local MarkerSizeInput = MakeInput(
+    MobileTab, State.MarkerSize, 0.65, 165, 0.35
+)
+
+local OffsetXLabel = MakeLabel(
+    MobileTab, "Смещение X", 200
+)
+
+local OffsetXInput = MakeInput(
+    MobileTab, State.OffsetX, 0.65, 200, 0.35
+)
+
+local OffsetYLabel = MakeLabel(
+    MobileTab, "Смещение Y", 235
+)
+
+local OffsetYInput = MakeInput(
+    MobileTab, State.OffsetY, 0.65, 235, 0.35
+)
+
+local MarkerListTitle = MakeLabel(
+    MobileTab, "СПИСОК ТОЧЕК", 275
+)
+
+local MarkerList = New("Frame", {
+    Size = UDim2.new(1, -4, 0, 130),
+    Position = UDim2.fromOffset(2, 305),
+    BackgroundTransparency = 1
+}, MobileTab)
+
+-- ==========================================
+-- 3. PC TAB
+-- ==========================================
+
+MakeLabel(
+    PCTab,
+    "УПРАВЛЕНИЕ С КЛАВИАТУРЫ",
+    0
+)
+
+local HotkeyToggleButton = MakeButton(
+    PCTab, "Переключение: F6", 0, 35, 1
+)
+
+local HotkeyAddButton = MakeButton(
+    PCTab, "Новая точка: F7", 0, 70, 1
+)
+
+local HotkeyHideButton = MakeButton(
+    PCTab, "Скрыть панель: F8", 0, 105, 1
+)
+
+local TurboButton = MakeButton(
+    PCTab, "TURBO: ВЫКЛ", 0, 150, 1
+)
+
+local PulseButton = MakeButton(
+    PCTab, "ПУЛЬСАЦИЯ ТОЧЕК: ВКЛ", 0, 185, 1
+)
+
+local AutoMinimizeButton = MakeButton(
+    PCTab, "АВТОСКРЫТИЕ: ВЫКЛ", 0, 220, 1
+)
+
+local ThemeButton = MakeButton(
+    PCTab, "ТЕМА: DARK", 0, 255, 1
+)
+
+-- ==========================================
+-- 4. CONFIG TAB
+-- ==========================================
+
+MakeLabel(
+    ConfigTab,
+    "КОНФИГУРАЦИЯ",
+    0
+)
+
+local SaveConfigButton = MakeButton(
+    ConfigTab, "СОХРАНИТЬ В ПАМЯТЬ", 0, 35, 1
+)
+
+local LoadConfigButton = MakeButton(
+    ConfigTab, "ЗАГРУЗИТЬ ИЗ ПАМЯТИ", 0, 70, 1
+)
+
+local ResetConfigButton = MakeButton(
+    ConfigTab, "СБРОСИТЬ НАСТРОЙКИ", 0, 105, 1,
+    Color3.fromRGB(160, 75, 75)
+)
+
+local StatsLabel = New("TextLabel", {
+    Size = UDim2.new(1, -4, 0, 70),
+    Position = UDim2.fromOffset(2, 150),
+    BackgroundColor3 = Themes.DARK.Card,
+    TextColor3 = Themes.DARK.Text,
+    Text = "Кликов: 0\nТочек: 0\nСтатус: Остановлен",
+    TextSize = 12,
+    Font = Enum.Font.Gotham,
+    TextWrapped = true
+}, ConfigTab)
+
+Round(StatsLabel, 7)
+
+-- ==========================================
+-- 5. MARKER SYSTEM
+-- ==========================================
+
+local function UpdateMarkerList()
+    for _, child in ipairs(MarkerList:GetChildren()) do
+        child:Destroy()
+    end
+
+    for index, marker in ipairs(State.Markers) do
+        local button = New("TextButton", {
+            Size = UDim2.new(1, -4, 0, 26),
+            Position = UDim2.fromOffset(2, (index - 1) * 29),
+            BackgroundColor3 =
+                State.SelectedMarker == marker
+                and Color3.fromRGB(45, 115, 190)
+                or Themes.DARK.Card,
+
+            Text = "Точка " .. index,
+            TextColor3 = Themes.DARK.Text,
+            TextSize = 11,
+            Font = Enum.Font.GothamBold
+        }, MarkerList)
+
+        Round(button, 5)
+
+        ConnectButton(button, function()
+            State.SelectedMarker = marker
+            UpdateMarkerList()
+        end)
+    end
+
+    StatsLabel.Text =
+        "Кликов: " .. State.ClickCount ..
+        "\nТочек: " .. #State.Markers ..
+        "\nСтатус: " ..
+        (State.Running and "Работает" or "Остановлен")
+end
+
+local function CreateMarker(position)
+    if #State.Markers >= 50 then
+        SetStatus("Достигнут лимит точек")
+        return
+    end
+
+    local marker = {
+        X = position and position.X or 0.5,
+        Y = position and position.Y or 0.5,
+        Enabled = true,
+        Color = Color3.fromRGB(60, 160, 255),
+        Object = nil
+    }
+
+    local visual = New("TextButton", {
+        Name = "Marker_" .. (#State.Markers + 1),
+        Size = UDim2.fromOffset(
+            State.MarkerSize,
+            State.MarkerSize
+        ),
+        Position = UDim2.new(
+            marker.X,
+            0,
+            marker.Y,
+            0
+        ),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundColor3 = marker.Color,
+        Text = tostring(#State.Markers + 1),
+        TextColor3 = Color3.new(1, 1, 1),
+        TextSize = 12,
+        Font = Enum.Font.GothamBold,
+        Active = true,
+        ZIndex = 10
+    }, MarkerFolder)
+
+    Round(visual, 100)
+    Stroke(visual, Color3.new(1, 1, 1), 1.5)
+
+    marker.Object = visual
+
+    table.insert(State.Markers, marker)
+    State.SelectedMarker = marker
+
+    local dragging = false
+    local dragStart
+    local startPosition
+    local activeInput
+
+    Track(visual.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+
+            dragging = true
+            dragStart = input.Position
+            startPosition = visual.Position
+            activeInput = input
+        end
+    end))
+
+    Track(UIS.InputChanged:Connect(function(input)
+        if not dragging then
+            return
+        end
+
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement
+            and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+
+        local delta = input.Position - dragStart
+
+        local newX = startPosition.X.Offset + delta.X
+        local newY = startPosition.Y.Offset + delta.Y
+
+        visual.Position = UDim2.new(
+            startPosition.X.Scale,
+            newX,
+            startPosition.Y.Scale,
+            newY
+        )
+
+        local absolute = visual.AbsolutePosition
+        local screenSize = Screen.AbsoluteSize
+
+        marker.X = math.clamp(
+            (absolute.X + visual.AbsoluteSize.X / 2)
+            / screenSize.X,
+            0,
+            1
+        )
+
+        marker.Y = math.clamp(
+            (absolute.Y + visual.AbsoluteSize.Y / 2)
+            / screenSize.Y,
+            0,
+            1
+        )
+    end))
+
+    Track(UIS.InputEnded:Connect(function(input)
+        if input == activeInput
+            or input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+
+            dragging = false
+            activeInput = nil
+        end
+    end))
+
+    Track(visual.Activated:Connect(function()
+        State.SelectedMarker = marker
+        UpdateMarkerList()
+    end))
+
+    UpdateMarkerList()
+    SetStatus("Добавлена точка " .. #State.Markers)
+end
+
+local function RemoveSelectedMarker()
+    local marker = State.SelectedMarker
+
+    if not marker then
+        SetStatus("Сначала выбери точку")
+        return
+    end
+
+    if marker.Object then
+        marker.Object:Destroy()
+    end
+
+    for index, item in ipairs(State.Markers) do
+        if item == marker then
+            table.remove(State.Markers, index)
+            break
+        end
+    end
+
+    State.SelectedMarker = State.Markers[1]
+
+    UpdateMarkerList()
+    SetStatus("Точка удалена")
+end
+
+local function UpdateMarkerSize()
+    for _, marker in ipairs(State.Markers) do
+        if marker.Object then
+            marker.Object.Size = UDim2.fromOffset(
+                State.MarkerSize,
+                State.MarkerSize
+            )
+        end
+    end
+end
+
+-- ==========================================
+-- 6. INPUT VALIDATION
+-- ==========================================
+
+local function ReadNumber(input, oldValue, minimum, maximum)
+    local value = tonumber(input.Text)
+
+    if not value or value ~= value then
+        input.Text = tostring(oldValue)
+        return oldValue
+    end
+
+    value = math.clamp(value, minimum, maximum)
+    input.Text = tostring(value)
+
+    return value
+end
+
+local function UpdateSettings()
+    State.Interval = ReadNumber(
+        SpeedInput,
+        State.Interval,
+        0.01,
+        60
+    )
+
+    State.HoldTime = ReadNumber(
+        HoldInput,
+        State.HoldTime,
+        0.005,
+        5
+    )
+
+    State.StartDelay = ReadNumber(
+        DelayInput,
+        State.StartDelay,
+        0,
+        3600
+    )
+
+    State.ClickLimit = math.floor(ReadNumber(
+        LimitInput,
+        State.ClickLimit,
+        0,
+        1000000
+    ))
+
+    State.MarkerSize = math.floor(ReadNumber(
+        MarkerSizeInput,
+        State.MarkerSize,
+        20,
+        90
+    ))
+
+    State.OffsetX = ReadNumber(
+        OffsetXInput,
+        State.OffsetX,
+        -500,
+        500
+    )
+
+    State.OffsetY = ReadNumber(
+        OffsetYInput,
+        State.OffsetY,
+        -500,
+        500
+    )
+
+    UpdateMarkerSize()
+    SetStatus("Настройки обновлены")
+end
+
+local function CycleRunMode()
+    if State.RunMode == "TOGETHER" then
+        State.RunMode = "SEQUENCE"
+        ModeButton.Text = "РЕЖИМ: ПО ОЧЕРЕДИ"
+    else
+        State.RunMode = "TOGETHER"
+        ModeButton.Text = "РЕЖИМ: ВСЕ ТОЧКИ"
+    end
+end
+
+local function CycleActionMode()
+    if State.ActionMode == "CLICK" then
+        State.ActionMode = "HOLD"
+        ActionButton.Text = "ДЕЙСТВИЕ: УДЕРЖАНИЕ"
+    else
+        State.ActionMode = "CLICK"
+        ActionButton.Text = "ДЕЙСТВИЕ: КЛИК"
+    end
+end
+
+-- ==========================================
+-- 7. BUTTON CONNECTIONS
+-- ==========================================
+
+ConnectButton(AddPointButton, function()
+    CreateMarker()
+end)
+
+ConnectButton(MobileAddButton, function()
+    CreateMarker()
+end)
+
+ConnectButton(RemovePointButton, function()
+    RemoveSelectedMarker()
+end)
+
+ConnectButton(ModeButton, CycleRunMode)
+ConnectButton(ActionButton, CycleActionMode)
+
+ConnectButton(MarkerSizeInput, function()
+    UpdateSettings()
+end)
+
+ConnectButton(SpeedInput, function()
+    UpdateSettings()
+end)
+
+Track(SpeedInput.FocusLost:Connect(UpdateSettings))
+Track(HoldInput.FocusLost:Connect(UpdateSettings))
+Track(DelayInput.FocusLost:Connect(UpdateSettings))
+Track(LimitInput.FocusLost:Connect(UpdateSettings))
+Track(MarkerSizeInput.FocusLost:Connect(UpdateSettings))
+Track(OffsetXInput.FocusLost:Connect(UpdateSettings))
+Track(OffsetYInput.FocusLost:Connect(UpdateSettings))
+
+ConnectButton(TurboButton, function()
+    State.Turbo = not State.Turbo
+
+    TurboButton.Text =
+        "TURBO: " .. (State.Turbo and "ВКЛ" or "ВЫКЛ")
+
+    SetStatus("Turbo " .. (State.Turbo and "включён" or "выключен"))
+end)
+
+ConnectButton(PulseButton, function()
+    State.Pulse = not State.Pulse
+
+    PulseButton.Text =
+        "ПУЛЬСАЦИЯ ТОЧЕК: " ..
+        (State.Pulse and "ВКЛ" or "ВЫКЛ")
+end)
+
+ConnectButton(AutoMinimizeButton, function()
+    State.AutoMinimize = not State.AutoMinimize
+
+    AutoMinimizeButton.Text =
+        "АВТОСКРЫТИЕ: " ..
+        (State.AutoMinimize and "ВКЛ" or "ВЫКЛ")
+end)
+
+ConnectButton(ThemeButton, function()
+    local themes = {"DARK", "BLUE", "GREEN"}
+
+    local current = 1
+
+    for index, name in ipairs(themes) do
+        if name == State.Theme then
+            current = index
+            break
+        end
+    end
+
+    current = current % #themes + 1
+
+    SetTheme(themes[current])
+    ThemeButton.Text = "ТЕМА: " .. themes[current]
+end)
+
+ConnectButton(HotkeyToggleButton, function()
+    State.WaitingHotkey = "Toggle"
+    SetStatus("Нажми клавишу для переключения")
+end)
+
+ConnectButton(HotkeyAddButton, function()
+    State.WaitingHotkey = "Add"
+    SetStatus("Нажми клавишу для точки")
+end)
+
+ConnectButton(HotkeyHideButton, function()
+    State.WaitingHotkey = "Hide"
+    SetStatus("Нажми клавишу для скрытия")
+end)
+
+ConnectButton(StartButton, function()
+    if StartAutoClicker then
+        StartAutoClicker()
+    end
+end)
+
+ConnectButton(StopButton, function()
+    if StopAutoClicker then
+        StopAutoClicker()
+    end
+end)
+
+ConnectButton(MobileStartButton, function()
+    if StartAutoClicker then
+        StartAutoClicker()
+    end
+end)
+
+ConnectButton(MobileStopButton, function()
+    if StopAutoClicker then
+        StopAutoClicker()
+    end
+end)
+
+ConnectButton(AddPointButton, function()
+    CreateMarker()
+end)
+
+-- ==========================================
+-- 8. KEYBOARD SYSTEM
+-- ==========================================
+
+Track(UIS.InputBegan:Connect(function(input, processed)
+    if processed or State.Destroyed then
+        return
+    end
+
+    if State.WaitingHotkey then
+        local key = input.KeyCode
+
+        if key ~= Enum.KeyCode.Unknown then
+            State.Hotkeys[State.WaitingHotkey] = key
+
+            HotkeyToggleButton.Text =
+                "Переключение: " ..
+                State.Hotkeys.Toggle.Name
+
+            HotkeyAddButton.Text =
+                "Новая точка: " ..
+                State.Hotkeys.Add.Name
+
+            HotkeyHideButton.Text =
+                "Скрыть панель: " ..
+                State.Hotkeys.Hide.Name
+
+            State.WaitingHotkey = nil
+            SetStatus("Горячая клавиша сохранена")
+        end
+
+        return
+    end
+
+    if input.KeyCode == State.Hotkeys.Toggle then
+        if State.Running then
+            if StopAutoClicker then
+                StopAutoClicker()
+            end
+        else
+            if StartAutoClicker then
+                StartAutoClicker()
+            end
+        end
+
+    elseif input.KeyCode == State.Hotkeys.Add then
+        CreateMarker()
+
+    elseif input.KeyCode == State.Hotkeys.Hide then
+        SetMinimized(not State.Minimized)
+    end
+end))
+
+-- ==========================================
+-- 9. GUI CONTROL
+-- ==========================================
+
+ConnectButton(MinimizeButton, function()
+    SetMinimized(true)
+end)
+
+ConnectButton(MiniButton, function()
+    SetMinimized(false)
+end)
+
+-- ==========================================
+-- 10. TAB EVENTS
+-- ==========================================
+
+ConnectButton(BothButton, function()
+    SetTab("BOTH")
+end)
+
+ConnectButton(MobileButton, function()
+    SetTab("MOBILE")
+end)
+
+ConnectButton(PCButton, function()
+    SetTab("PC")
+end)
+
+ConnectButton(ConfigButton, function()
+    SetTab("CONFIG")
+end)
+
+SetTab("BOTH")
+
+-- ==========================================
+-- 11. INITIAL POINT
+-- ==========================================
+
+CreateMarker(Vector2.new(0.5, 0.5))
+
+-- Part 3 continues below.
+
+
+--[[
+    AUTO CLICKER ULTRA PRO v11
+    Part 3/3 — Engine, configs, cleanup
+]]
+
+-- ==========================================
+-- 1. SAFE CLICK ENGINE
+-- ==========================================
+
+local VirtualInputManager =
+    game:GetService("VirtualInputManager")
+
+local VirtualUser =
+    game:GetService("VirtualUser")
+
+local function GetScreenPosition(marker)
+    local screenSize = Screen.AbsoluteSize
+
+    local x = marker.X * screenSize.X + State.OffsetX
+    local y = marker.Y * screenSize.Y + State.OffsetY
+
+    return Vector2.new(
+        math.clamp(x, 0, screenSize.X),
+        math.clamp(y, 0, screenSize.Y)
+    )
+end
+
+local function SendMouseButton(position, down)
+    local success = pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(
+            position.X,
+            position.Y,
+            0,
+            down,
+            game,
+            0
+        )
+    end)
+
+    if not success then
+        return false
+    end
+
+    return true
+end
+
+local function PerformClick(marker)
+    if State.Destroyed or not State.Running then
+        return false
+    end
+
+    local position = GetScreenPosition(marker)
+
+    if not SendMouseButton(position, true) then
+        return false
+    end
+
+    if State.ActionMode == "HOLD" then
+        task.wait(State.HoldTime)
+    else
+        task.wait(0.01)
+    end
+
+    SendMouseButton(position, false)
+
+    State.ClickCount += 1
+
+    return true
+end
+
+-- ==========================================
+-- 2. MARKER VALIDATION
+-- ==========================================
+
+local function GetActiveMarkers()
+    local result = {}
+
+    for _, marker in ipairs(State.Markers) do
+        if marker.Enabled and marker.Object
+            and marker.Object.Parent then
+
+            table.insert(result, marker)
+        end
+    end
+
+    return result
+end
+
+-- ==========================================
+-- 3. ENGINE CONTROL
+-- ==========================================
+
+local function WaitInterval(token)
+    local interval = State.Interval
+
+    if State.Turbo then
+        interval = math.max(interval * 0.5, 0.01)
+    end
+
+    if State.JitterMs > 0 then
+        interval += math.random(
+            0,
+            State.JitterMs
+        ) / 1000
+    end
+
+    local finish = os.clock() + interval
+
+    while os.clock() < finish do
+        if State.Destroyed
+            or not State.Running
+            or token ~= State.RunToken then
+
+            return false
+        end
+
+        task.wait(0.01)
+    end
+
+    return true
+end
+
+local function WaitStartDelay(token)
+    local finish = os.clock() + State.StartDelay
+
+    while os.clock() < finish do
+        if State.Destroyed
+            or not State.Running
+            or token ~= State.RunToken then
+
+            return false
+        end
+
+        task.wait(0.05)
+    end
+
+    return true
+end
+
+local function CanContinue(token)
+    if State.Destroyed then
+        return false
+    end
+
+    if not State.Running then
+        return false
+    end
+
+    if token ~= State.RunToken then
+        return false
+    end
+
+    if State.ClickLimit > 0
+        and State.ClickCount >= State.ClickLimit then
+
+        return false
+    end
+
+    return true
+end
+
+local function RunTogether(token)
+    while CanContinue(token) do
+        local markers = GetActiveMarkers()
+
+        if #markers == 0 then
+            SetStatus("Нет активных точек")
+            break
+        end
+
+        for _, marker in ipairs(markers) do
+            if not CanContinue(token) then
+                break
+            end
+
+            if State.ClickLimit > 0
+                and State.ClickCount >= State.ClickLimit then
+                break
+            end
+
+            PerformClick(marker)
+        end
+
+        if not WaitInterval(token) then
+            break
+        end
+    end
+end
+
+local function RunSequence(token)
+    while CanContinue(token) do
+        local markers = GetActiveMarkers()
+
+        if #markers == 0 then
+            SetStatus("Нет активных точек")
+            break
+        end
+
+        for _, marker in ipairs(markers) do
+            if not CanContinue(token) then
+                break
+            end
+
+            if State.ClickLimit > 0
+                and State.ClickCount >= State.ClickLimit then
+                break
+            end
+
+            PerformClick(marker)
+
+            if not WaitInterval(token) then
+                break
+            end
+        end
+
+        if State.CycleGap > 0 then
+            task.wait(State.CycleGap)
+        end
+    end
+end
+
+-- ==========================================
+-- 4. START / STOP
+-- ==========================================
+
+function StopAutoClicker()
+    if not State.Running then
+        return
+    end
+
+    State.Running = false
+    State.RunToken += 1
+
+    SetStatus("Автокликер остановлен")
+
+    UpdateMarkerList()
+end
+
+function StartAutoClicker()
+    if State.Destroyed then
+        return
+    end
+
+    if State.Running then
+        return
+    end
+
+    if #GetActiveMarkers() == 0 then
+        SetStatus("Сначала добавь точку")
+        return
+    end
+
+    State.Running = true
+    State.RunToken += 1
+
+    local token = State.RunToken
+
+    SetStatus("Подготовка запуска...")
+
+    if State.AutoMinimize then
+        SetMinimized(true)
+    end
+
+    task.spawn(function()
+        local success, err = pcall(function()
+            if not WaitStartDelay(token) then
+                return
+            end
+
+            if not CanContinue(token) then
+                return
+            end
+
+            SetStatus("Автокликер работает")
+
+            if State.RunMode == "TOGETHER" then
+                RunTogether(token)
+            else
+                RunSequence(token)
+            end
+        end)
+
+        if not success then
+            warn("[AC v11] Engine error:", err)
+        end
+
+        if token == State.RunToken then
+            State.Running = false
+            SetStatus(
+                success
+                and "Цикл завершён"
+                or "Ошибка движка"
+            )
+
+            UpdateMarkerList()
+        end
+    end)
+end
+
+-- ==========================================
+-- 5. CONFIG SYSTEM
+-- ==========================================
+
+local function BuildConfig()
+    local config = {
+        Version = VERSION,
+
+        Interval = State.Interval,
+        HoldTime = State.HoldTime,
+        StartDelay = State.StartDelay,
+
+        ClickLimit = State.ClickLimit,
+
+        OffsetX = State.OffsetX,
+        OffsetY = State.OffsetY,
+
+        MarkerSize = State.MarkerSize,
+
+        RunMode = State.RunMode,
+        ActionMode = State.ActionMode,
+
+        Turbo = State.Turbo,
+        Pulse = State.Pulse,
+        AutoMinimize = State.AutoMinimize,
+
+        Theme = State.Theme,
+
+        Markers = {}
+    }
+
+    for _, marker in ipairs(State.Markers) do
+        table.insert(config.Markers, {
+            X = marker.X,
+            Y = marker.Y,
+            Enabled = marker.Enabled
+        })
+    end
+
+    return config
+end
+
+local function ApplyConfig(config)
+    if type(config) ~= "table" then
+        return false
+    end
+
+    StopAutoClicker()
+
+    State.Interval = math.clamp(
+        tonumber(config.Interval) or 0.1,
+        0.01,
+        60
+    )
+
+    State.HoldTime = math.clamp(
+        tonumber(config.HoldTime) or 0.015,
+        0.005,
+        5
+    )
+
+    State.StartDelay = math.clamp(
+        tonumber(config.StartDelay) or 0,
+        0,
+        3600
+    )
+
+    State.ClickLimit = math.floor(math.clamp(
+        tonumber(config.ClickLimit) or 0,
+        0,
+        1000000
+    ))
+
+    State.OffsetX = math.clamp(
+        tonumber(config.OffsetX) or 35,
+        -500,
+        500
+    )
+
+    State.OffsetY = math.clamp(
+        tonumber(config.OffsetY) or 105,
+        -500,
+        500
+    )
+
+    State.MarkerSize = math.floor(math.clamp(
+        tonumber(config.MarkerSize) or 36,
+        20,
+        90
+    ))
+
+    State.RunMode =
+        config.RunMode == "SEQUENCE"
+        and "SEQUENCE"
+        or "TOGETHER"
+
+    State.ActionMode =
+        config.ActionMode == "HOLD"
+        and "HOLD"
+        or "CLICK"
+
+    State.Turbo = config.Turbo == true
+    State.Pulse = config.Pulse ~= false
+    State.AutoMinimize = config.AutoMinimize == true
+
+    if Themes[config.Theme] then
+        SetTheme(config.Theme)
+    end
+
+    for _, marker in ipairs(State.Markers) do
+        if marker.Object then
+            marker.Object:Destroy()
+        end
+    end
+
+    table.clear(State.Markers)
+    State.SelectedMarker = nil
+
+    if type(config.Markers) == "table" then
+        for _, data in ipairs(config.Markers) do
+            if type(data) == "table" then
+                local x = tonumber(data.X)
+                local y = tonumber(data.Y)
+
+                if x and y then
+                    local marker = {
+                        X = math.clamp(x, 0, 1),
+                        Y = math.clamp(y, 0, 1),
+                        Enabled = data.Enabled ~= false,
+                        Color = Color3.fromRGB(60, 160, 255),
+                        Object = nil
+                    }
+
+                    table.insert(State.Markers, marker)
+
+                    local visual = New("TextButton", {
+                        Size = UDim2.fromOffset(
+                            State.MarkerSize,
+                            State.MarkerSize
+                        ),
+                        Position = UDim2.new(
+                            marker.X,
+                            0,
+                            marker.Y,
+                            0
+                        ),
+                        AnchorPoint = Vector2.new(0.5, 0.5),
+                        BackgroundColor3 = marker.Color,
+                        Text = tostring(#State.Markers),
+                        TextColor3 = Color3.new(1, 1, 1),
+                        TextSize = 12,
+                        Font = Enum.Font.GothamBold,
+                        Active = true,
+                        ZIndex = 10
+                    }, MarkerFolder)
+
+                    Round(visual, 100)
+                    Stroke(visual, Color3.new(1, 1, 1), 1.5)
+
+                    marker.Object = visual
+                end
+            end
+        end
+    end
+
+    State.SelectedMarker = State.Markers[1]
+
+    SpeedInput.Text = tostring(State.Interval)
+    HoldInput.Text = tostring(State.HoldTime)
+    DelayInput.Text = tostring(State.StartDelay)
+    LimitInput.Text = tostring(State.ClickLimit)
+
+    MarkerSizeInput.Text = tostring(State.MarkerSize)
+    OffsetXInput.Text = tostring(State.OffsetX)
+    OffsetYInput.Text = tostring(State.OffsetY)
+
+    ModeButton.Text =
+        State.RunMode == "SEQUENCE"
+        and "РЕЖИМ: ПО ОЧЕРЕДИ"
+        or "РЕЖИМ: ВСЕ ТОЧКИ"
+
+    ActionButton.Text =
+        State.ActionMode == "HOLD"
+        and "ДЕЙСТВИЕ: УДЕРЖАНИЕ"
+        or "ДЕЙСТВИЕ: КЛИК"
+
+    TurboButton.Text =
+        "TURBO: " .. (State.Turbo and "ВКЛ" or "ВЫКЛ")
+
+    PulseButton.Text =
+        "ПУЛЬСАЦИЯ ТОЧЕК: " ..
+        (State.Pulse and "ВКЛ" or "ВЫКЛ")
+
+    AutoMinimizeButton.Text =
+        "АВТОСКРЫТИЕ: " ..
+        (State.AutoMinimize and "ВКЛ" or "ВЫКЛ")
+
+    UpdateMarkerList()
+
+    return true
+end
+
+ConnectButton(SaveConfigButton, function()
+    local config = BuildConfig()
+
+    local success, encoded = pcall(function()
+        return HttpService:JSONEncode(config)
+    end)
+
+    if not success then
+        SetStatus("Ошибка создания конфигурации")
+        return
+    end
+
+    State.ConfigSlots.Main = encoded
+
+    SetStatus("Конфигурация сохранена в памяти")
+end)
+
+ConnectButton(LoadConfigButton, function()
+    local encoded = State.ConfigSlots.Main
+
+    if not encoded then
+        SetStatus("Нет сохранённой конфигурации")
+        return
+    end
+
+    local success, config = pcall(function()
+        return HttpService:JSONDecode(encoded)
+    end)
+
+    if success and ApplyConfig(config) then
+        SetStatus("Конфигурация загружена")
+    else
+        SetStatus("Ошибка загрузки")
+    end
+end)
+
+ConnectButton(ResetConfigButton, function()
+    StopAutoClicker()
+
+    ApplyConfig({
+        Interval = 0.1,
+        HoldTime = 0.015,
+        StartDelay = 0,
+        ClickLimit = 0,
+
+        OffsetX = 35,
+        OffsetY = 105,
+        MarkerSize = 36,
+
+        RunMode = "TOGETHER",
+        ActionMode = "CLICK",
+
+        Theme = "DARK",
+
+        Markers = {
+            {
+                X = 0.5,
+                Y = 0.5,
+                Enabled = true
+            }
+        }
+    })
+
+    SetStatus("Настройки сброшены")
+end)
+
+-- ==========================================
+-- 6. MARKER VISUAL EFFECTS
+-- ==========================================
+
+task.spawn(function()
+    while not State.Destroyed do
+        if State.Pulse then
+            for _, marker in ipairs(State.Markers) do
+                local object = marker.Object
+
+                if object and object.Parent then
+                    local scale = State.Running and 1.12 or 1
+
+                    Tween(object, {
+                        Size = UDim2.fromOffset(
+                            State.MarkerSize * scale,
+                            State.MarkerSize * scale
+                        )
+                    }, 0.35)
+                end
+            end
+        end
+
+        task.wait(0.7)
+    end
+end)
+
+-- ==========================================
+-- 7. WINDOW DRAG
+-- ==========================================
+
+do
+    local dragging = false
+    local dragStart
+    local startPosition
+
+    Track(Header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+
+            dragging = true
+            dragStart = input.Position
+            startPosition = Main.Position
+        end
+    end))
+
+    Track(UIS.InputChanged:Connect(function(input)
+        if not dragging then
+            return
+        end
+
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement
+            and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+
+        local delta = input.Position - dragStart
+
+        Main.Position = UDim2.new(
+            startPosition.X.Scale,
+            startPosition.X.Offset + delta.X,
+            startPosition.Y.Scale,
+            startPosition.Y.Offset + delta.Y
+        )
+    end))
+
+    Track(UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+
+            dragging = false
+        end
+    end))
+end
+
+-- ==========================================
+-- 8. STATS UPDATE
+-- ==========================================
+
+task.spawn(function()
+    while not State.Destroyed do
+        if StatsLabel and StatsLabel.Parent then
+            StatsLabel.Text =
+                "Кликов: " .. State.ClickCount ..
+                "\nТочек: " .. #State.Markers ..
+                "\nСтатус: " ..
+                (State.Running and "Работает" or "Остановлен")
+        end
+
+        task.wait(0.5)
+    end
+end)
+
+-- ==========================================
+-- 9. CLEANUP
+-- ==========================================
+
+local function DestroyAutoClicker()
+    if State.Destroyed then
+        return
+    end
+
+    State.Destroyed = true
+    State.Running = false
+    State.RunToken += 1
+
+    DisconnectAll()
+
+    pcall(function()
+        Screen:Destroy()
+    end)
+
+    ENV[CLEANUP_KEY] = nil
+end
+
+ConnectButton(CloseButton, function()
+    DestroyAutoClicker()
+end)
+
+ENV[CLEANUP_KEY] = DestroyAutoClicker
+
+-- ==========================================
+-- 10. FINAL INITIALIZATION
+-- ==========================================
+
+SetTab("BOTH")
+SetTheme("DARK")
+
+UpdateMarkerList()
+
+SetStatus("AUTO CLICKER ULTRA PRO v11 готов")
+
+print("--------------------------------")
+print(" AUTO CLICKER ULTRA PRO v11")
+print(" Version: " .. VERSION)
+print(" Status: Initialized")
+print("--------------------------------")
